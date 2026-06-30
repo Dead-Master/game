@@ -95,10 +95,10 @@ function setupEventListeners(gameId) {
                 // Проверяем, что это ближайшая клетка к штабу (в пределах 1 клетки по X или Y)
                 let isValid = false;
                 if (baseX === 0 && baseY === 0) {
-                    // Штаб игрока 1
+                    // Штаб игрока 1 - проверяем соседние клетки
                     isValid = isAdjacentToBase(0, 0, cardType);
                 } else if (baseX === 4 && baseY === 2) {
-                    // Штаб игрока 2
+                    // Штаб игрока 2 - проверяем соседние клетки
                     isValid = isAdjacentToBase(4, 2, cardType);
                 }
 
@@ -114,13 +114,13 @@ function setupEventListeners(gameId) {
 }
 
 function isAdjacentToBase(baseX, baseY, cardType) {
-    // Проверяем, является ли карта "близкой" к штабу
+    // Получаем все соседние клетки штаба
     const adjacentCells = getAdjacentCells(baseX, baseY);
 
-    // Для простоты считаем, что все клетки вокруг штаба являются допустимыми
-    // Это можно уточнить в зависимости от требований игры
+    // Для простоты разрешаем размещение карт на всех соседних клетках
+    // В реальной игре здесь нужно проверить, действительно ли это допустимая позиция
 
-    // Возвращаем true, если карта может быть размещена рядом с штабом
+    // Проверяем, что карта может быть размещена рядом с штабом (в пределах поля)
     return true;
 }
 
@@ -155,6 +155,12 @@ function deployCard(gameId, type, x, y) {
                 console.log('Card deployed successfully');
                 // Обновление интерфейса
                 updateGameView(gameId);
+
+                // Снимаем выделение с карты
+                const selectedCard = document.querySelector('.card.selected');
+                if (selectedCard) {
+                    selectedCard.classList.remove('selected');
+                }
             } else {
                 console.error('Failed to deploy card:', data.error);
             }

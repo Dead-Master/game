@@ -29,6 +29,15 @@
             background-color: #f0f0f0;
         }
 
+        .cell-number {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            font-size: 16px;
+            font-weight: bold;
+            color: #333;
+        }
+
         .player-base {
             width: 150px;
             height: 150px;
@@ -142,6 +151,7 @@
         @for ($y = 2; $y >= 0; $y--)
             @for ($x = 0; $x < 5; $x++)
                 <div class="cell" data-x="{{ $x }}" data-y="{{ $y }}">
+                    <div class="cell-number">{{ $x }},{{ $y }}</div>
                     <!-- Отображение штабов игроков -->
                     @if ($x == 0 && $y == 0)
                         <div class="player-base player-1-base" data-cell-x="0" data-cell-y="0">
