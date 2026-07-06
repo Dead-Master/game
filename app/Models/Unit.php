@@ -21,6 +21,8 @@ class Unit extends Model
         'position_y',
         'state',
         'is_active_turn',
+        'has_attacked_this_turn',
+        'has_counter_attacked_this_turn',
     ];
 
     protected $casts = [
@@ -31,6 +33,8 @@ class Unit extends Model
         'position_x' => 'integer',
         'position_y' => 'integer',
         'is_active_turn' => 'boolean',
+        'has_attacked_this_turn' => 'boolean',
+        'has_counter_attacked_this_turn' => 'boolean',
     ];
 
     public function game(): BelongsTo
@@ -56,6 +60,14 @@ class Unit extends Model
 
     public function canCounterAttack(): bool
     {
+        if ($this->has_counter_attacked_this_turn) {
+            return false;
+        }
+
+        if ($this->type === 'berserker') {
+            return !$this->has_attacked_this_turn;
+        }
+
         return $this->type === 'infantry' || $this->type === 'scout';
     }
 

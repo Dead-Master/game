@@ -10,11 +10,10 @@ Route::get('/user', function (Request $request) {
 
 // Создание новой игры
 Route::post('/games', [GameController::class, 'store']);
+Route::get('/games/{id}', [GameController::class, 'showState']);
 
-// Получение текущего состояния игры
-Route::get('/games/{id}', [GameController::class, 'showView']);
-
-// Действия игрока (без CSRF проверки благодаря middleware)
 Route::post('games/{game}/deploy-card', [GameController::class, 'deployCard']);
 Route::post('games/{game}/move-unit', [GameController::class, 'moveUnit']);
+Route::post('games/{game}/attack-unit', [GameController::class, 'attackUnit']);
+Route::post('games/{game}/attack-base', [GameController::class, 'attackWithBase']);
 Route::post('games/{game}/end-turn', [GameController::class, 'endTurn']);

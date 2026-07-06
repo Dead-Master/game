@@ -18,6 +18,7 @@ class GamePlayer extends Model
         'base_attack',
         'supply_income',
         'supplies_current',
+        'base_has_attacked_this_turn',
         'hand',
         'deck',
     ];
@@ -27,6 +28,7 @@ class GamePlayer extends Model
         'base_attack' => 'integer',
         'supply_income' => 'integer',
         'supplies_current' => 'integer',
+        'base_has_attacked_this_turn' => 'boolean',
         'hand' => 'array',
         'deck' => 'array',
     ];
@@ -43,11 +45,8 @@ class GamePlayer extends Model
 
     public function getPosition(): array
     {
-        // Горизонтальное поле 5x3 (X: 0-4, Y: 0-2)
         return match ($this->side) {
-            // Игрок 1: Левый верхний угол
             'player_1' => ['x' => 0, 'y' => 0],
-            // Игрок 2: Правый нижний угол
             'player_2' => ['x' => 4, 'y' => 2],
             default => throw new \InvalidArgumentException('Неизвестная сторона'),
         };
@@ -58,23 +57,19 @@ class GamePlayer extends Model
         $pos = $this->getPosition();
         $adjacent = [];
 
-        // Направление: вверх, вниз, влево, вправо и диагонали (все 8 направлений)
         foreach ([[0, -1], [0, 1], [-1, 0], [1, 0], [-1, -1], [-1, 1], [1, -1], [1, 1]] as [$dx, $dy]) {
             $nx = $pos['x'] + $dx;
             $ny = $pos['y'] + $dy;
 
-            // Границы поля: X (0..4), Y (0..2)
             if ($nx >= 0 && $nx < 5 && $ny >= 0 && $ny < 3) {
                 $adjacent[] = ['x' => $nx, 'y' => $ny];
             }
         }
 
-        // Убираем штаб (саму точку), так как карты не могут быть размещены на штабе
         $adjacent = array_filter($adjacent, function($cell) use ($pos) {
             return !($cell['x'] == $pos['x'] && $cell['y'] == $pos['y']);
         });
 
-        // Сортируем клетки для более предсказуемого порядка
         usort($adjacent, function($a, $b) {
             if ($a['y'] != $b['y']) {
                 return $a['y'] - $b['y'];
