@@ -79,64 +79,73 @@ function setupEventListeners(gameId) {
         });
     });
 
-    // Добавляем обработчик для клеток штаба
-    const baseCells = document.querySelectorAll('.player-base');
-    baseCells.forEach(cell => {
+    // Добавляем обработчик для клеток игрового поля
+    const cells = document.querySelectorAll('.cell');
+    cells.forEach(cell => {
         cell.addEventListener('click', function() {
             // Проверяем, есть ли выделенная карта
             const selectedCard = document.querySelector('.card.selected');
             if (selectedCard) {
                 const cardType = selectedCard.getAttribute('data-card-type');
+                const cellX = parseInt(this.getAttribute('data-x'));
+                const cellY = parseInt(this.getAttribute('data-y'));
 
-                // Получаем координаты штаба
-                const baseX = parseInt(this.getAttribute('data-cell-x'));
-                const baseY = parseInt(this.getAttribute('data-cell-y'));
+                // Проверяем, можно ли разместить карту в этой клетке
+                // Для первого игрока (красных) проверяем соседние клетки с штабом
+                const player1BaseX = 0;
+                const player1BaseY = 0;
 
-                // Проверяем, что это ближайшая клетка к штабу (в пределах 1 клетки по X или Y)
+                // Получаем все соседние клетки штаба
+                const adjacentCells = getAdjacentCells(player1BaseX, player1BaseY);
+
+                // Проверяем, является ли выбранная клетка соседней к штабу
                 let isValid = false;
-                if (baseX === 0 && baseY === 0) {
-                    // Штаб игрока 1 - проверяем соседние клетки
-                    isValid = isAdjacentToBase(0, 0, cardType);
-                } else if (baseX === 4 && baseY === 2) {
-                    // Штаб игрока 2 - проверяем соседние клетки
-                    isValid = isAdjacentToBase(4, 2, cardType);
+                for (let i = 0; i < adjacentCells.length; i++) {
+                    if (adjacentCells[i].x === cellX && adjacentCells[i].y === cellY) {
+                        isValid = true;
+                        break;
+                    }
                 }
 
                 if (isValid) {
-                    // Перемещаем карту на штаб
-                    deployCardToBase(gameId, cardType, baseX, baseY);
+                    // Перемещаем карту на выбранную клетку
+                    deployCard(gameId, cardType, cellX, cellY);
+
+                    // Снимаем выделение с карты
+                    selectedCard.classList.remove('selected');
                 } else {
-                    alert('Вы можете размещать карты только на клетках рядом со своим штабом!');
+                    alert('Вы можете размещать карты только на соседних клетках с вашим штабом!');
                 }
             }
         });
     });
 }
-
-function isAdjacentToBase(baseX, baseY, cardType) {
-    // Получаем все соседние клетки штаба
-    const adjacentCells = getAdjacentCells(baseX, baseY);
-
-    // Для простоты разрешаем размещение карт на всех соседних клетках
-    // В реальной игре здесь нужно проверить, действительно ли это допустимая позиция
-
-    // Проверяем, что карта может быть размещена рядом с штабом (в пределах поля)
-    return true;
-}
-
 function getAdjacentCells(x, y) {
     const adjacent = [];
 
-    // Соседние клетки (вверх, вниз, влево, вправо)
-    if (x > 0) adjacent.push({x: x-1, y: y});
-    if (x < 4) adjacent.push({x: x+1, y: y});
-    if (y > 0) adjacent.push({x: x, y: y-1});
-    if (y < 2) adjacent.push({x: x, y: y+1});
+    // Соседние клетки (вверх, вниз, влево, вправо и диагонали)
+    for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+            // Пропускаем центральную клетку (штаб)
+            if (dx === 0 && dy === 0) continue;
+
+            const nx = x + dx;
+            const ny = y + dy;
+
+            // Проверяем границы поля
+            if (nx >= 0 && nx < 5 && ny >= 0 && ny < 3) {
+                adjacent.push({x: nx, y: ny});
+            }
+        }
+    }
 
     return adjacent;
 }
 
 function deployCard(gameId, type, x, y) {
+    // Получаем текущего игрока из сессии (для простоты предположим, что это игрок 1)
+    const currentPlayerSide = 'player_1'; // В реальном приложении нужно получить из состояния игры
+
     fetch(`/api/games/${gameId}/deploy-card`, {
         method: 'POST',
         headers: {
@@ -144,9 +153,10 @@ function deployCard(gameId, type, x, y) {
             'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
         },
         body: JSON.stringify({
+            side: currentPlayerSide,
             type: type,
-            x: x,
-            y: y
+            cell_x: x,
+            cell_y: y
         })
     })
         .then(response => response.json())
@@ -155,18 +165,14 @@ function deployCard(gameId, type, x, y) {
                 console.log('Card deployed successfully');
                 // Обновление интерфейса
                 updateGameView(gameId);
-
-                // Снимаем выделение с карты
-                const selectedCard = document.querySelector('.card.selected');
-                if (selectedCard) {
-                    selectedCard.classList.remove('selected');
-                }
             } else {
                 console.error('Failed to deploy card:', data.error);
+                alert('Не удалось разместить карту: ' + (data.message || 'Неправильное размещение'));
             }
         })
         .catch(error => {
             console.error('Error deploying card:', error);
+            alert('Ошибка при размещении карты');
         });
 }
 
@@ -263,6 +269,8 @@ function updateGameView(gameId) {
         .then(data => {
             // Здесь обновляем интерфейс на основе полученных данных
             console.log('Updated game data:', data);
+            // Для простоты перезагружаем страницу, но в реальном приложении лучше обновить только нужные элементы
+            location.reload();
         })
         .catch(error => {
             console.error('Error updating game view:', error);

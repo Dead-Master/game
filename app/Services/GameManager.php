@@ -78,7 +78,7 @@ final class GameManager
 
         if (!$isAdjacent) return false;
 
-        // Проверка занятости клетки через связи игрока (не требует game_id извне)
+        // Проверка занятости клетки
         $occupied = $player->units()
             ->where('state', 'board')
             ->where('position_x', $targetCell['x'])
@@ -88,19 +88,27 @@ final class GameManager
         if ($occupied) return false;
 
         $card = $player->hand[$handIndex];
-        $cost = match($card['type']) { 'archer' => 3, 'berserker' => 4, 'infantry' => 2, 'scout' => 1 };
+        $cost = match($card['type']) {
+            'archer' => 3,
+            'berserker' => 4,
+            'infantry' => 2,
+            'scout' => 1
+        };
 
         if ($player->supplies_current < $cost) return false;
 
         DB::transaction(function () use ($player, $card, $targetCell, $cost, $handIndex) {
             $stats = Unit::fromCardType($card['type']);
 
-            // Теперь $player->game_id гарантированно существует и заполнен
+            // Создаем юнита
             Unit::create(array_merge([
                 'game_id' => $player->game_id,
                 'owner_id' => $player->id,
                 'state' => 'board',
-            ], $stats));
+            ], $stats, [
+                'position_x' => $targetCell['x'],
+                'position_y' => $targetCell['y']
+            ]));
 
             $player->supplies_current -= $cost;
             array_splice($player->hand, $handIndex, 1);
@@ -109,6 +117,7 @@ final class GameManager
 
         return true;
     }
+
 
     public function moveUnit(Unit $unit, int $targetX, int $targetY): bool
     {
@@ -186,16 +195,28 @@ final class GameManager
         $player->update(['deck' => $deck]);
     }
 
-    private function getAdjacentCellsForPosition(array $pos): array
+    public function getAdjacentCellsForPosition(array $position): array
     {
         $adjacent = [];
-        foreach ([[0, -1], [0, 1], [-1, 0], [1, 0]] as [$dx, $dy]) {
-            $nx = $pos['x'] + $dx;
-            $ny = $pos['y'] + $dy;
+        $x = $position['x'];
+        $y = $position['y'];
+
+        // Соседние клетки (вверх, вниз, влево, вправо и диагонали)
+        foreach ([[0, -1], [0, 1], [-1, 0], [1, 0], [-1, -1], [-1, 1], [1, -1], [1, 1]] as [$dx, $dy]) {
+            $nx = $x + $dx;
+            $ny = $y + $dy;
+
+            // Границы поля: X (0..4), Y (0..2)
             if ($nx >= 0 && $nx < 5 && $ny >= 0 && $ny < 3) {
                 $adjacent[] = ['x' => $nx, 'y' => $ny];
             }
         }
+
+        // Убираем штаб (саму точку), так как карты не могут быть размещены на штабе
+        $adjacent = array_filter($adjacent, function($cell) use ($position) {
+            return !($cell['x'] == $position['x'] && $cell['y'] == $position['y']);
+        });
+
         return $adjacent;
     }
 

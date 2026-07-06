@@ -10,7 +10,7 @@ return new class extends Migration
     {
         Schema::create('games', function (Blueprint $table) {
             $table->id();
-            $table->enum('status', ['waiting', 'playing', 'finished'])->default('waiting');
+            $table->enum('status', ['waiting', 'playing', 'finished', 'active'])->default('waiting');
             $table->unsignedSmallInteger('current_turn')->default(1);
             $table->unsignedSmallInteger('round_number')->default(1);
             $table->json('grid_state')->nullable(); // Временное хранение состояния доски для оптимизации

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Game;
+use App\Models\GamePlayer;
 use App\Services\GameManager;
 use Illuminate\Http\Request;
 
@@ -10,130 +11,154 @@ class GameController extends Controller
 {
     public function store(Request $request)
     {
-        // Валидация входных данных
-        $validated = $request->validate([
-            'player_1_name' => 'required|string|max:255',
-            'player_2_name' => 'required|string|max:255',
-        ]);
-
-        // Создание новой игры
+        // Логика создания игры
         $game = Game::create([
-            'status' => 'waiting',
+            'player_1_name' => $request->player_1_name,
+            'player_2_name' => $request->player_2_name,
+            'status' => 'active',
             'current_turn' => 1,
             'round_number' => 1,
-            'grid_state' => [],
-            'player_1_name' => $validated['player_1_name'],
-            'player_2_name' => $validated['player_2_name'],
         ]);
 
-        // Создание игроков
-        $game->players()->create([
+        // Инициализация игроков
+        $gamePlayer1 = GamePlayer::create([
+            'game_id' => $game->id,
             'side' => 'player_1',
-            'user_id' => null,
             'base_hp' => 10,
             'base_attack' => 1,
-            'supply_income' => 5,
-            'supplies_current' => 0,
+            'supply_income' => 1,
+            'supplies_current' => 5,
             'hand' => [],
             'deck' => [],
         ]);
 
-        $game->players()->create([
+        $gamePlayer2 = GamePlayer::create([
+            'game_id' => $game->id,
             'side' => 'player_2',
-            'user_id' => null,
             'base_hp' => 10,
             'base_attack' => 1,
-            'supply_income' => 5,
-            'supplies_current' => 0,
+            'supply_income' => 1,
+            'supplies_current' => 5,
             'hand' => [],
             'deck' => [],
         ]);
 
-        // Инициализация игры
-        $gameManager = new GameManager();
-        $gameManager->initializeGame($game);
+        // Устанавливаем текущего игрока
+        session(['current_player_side' => 'player_1']);
 
-        return redirect()->route('game.show', ['id' => $game->id]);
+        // Возвращаем ID игры
+        return response()->json(['game_id' => $game->id]);
     }
 
     public function showView($id)
     {
-        $game = Game::findOrFail($id);
+        $game = Game::with(['player1', 'player2'])->findOrFail($id);
 
-        // Получаем данные игрока 1 (как пример)
-        $player1 = $game->players()->where('side', 'player_1')->first();
-
-        return view('game', compact('game', 'player1'));
+        return view('game', compact('game'));
     }
 
     public function deployCard(Request $request, $gameId)
     {
-        // Валидация входных данных
-        $validated = $request->validate([
-            'type' => 'required|string',
-            'x' => 'required|integer|min:0|max:4',
-            'y' => 'required|integer|min:0|max:2',
-        ]);
+        try {
+            $game = Game::findOrFail($gameId);
 
-        $game = Game::findOrFail($gameId);
-        $gameManager = new GameManager();
+            // Получаем текущего игрока из сессии
+            $currentPlayerSide = session('current_player_side');
 
-        // Получение активного игрока (предполагаем, что текущий игрок - тот, кто делает ход)
-        $player = $game->players()->where('side', 'player_1')->first(); // временно для тестирования
+            if (!$currentPlayerSide) {
+                return response()->json(['success' => false, 'error' => 'No current player'], 403);
+            }
 
-        if (!$player) {
-            return response()->json(['error' => 'Player not found'], 404);
+            // Проверяем, что это правильный игрок
+            $player = GamePlayer::where('game_id', $gameId)
+                ->where('side', $currentPlayerSide)
+                ->first();
+
+            if (!$player) {
+                return response()->json(['success' => false, 'error' => 'Invalid player'], 403);
+            }
+
+            // Используем сервис GameManager для размещения карты
+            $gameManager = new GameManager();
+
+            $targetCell = [
+                'x' => $request->cell_x,
+                'y' => $request->cell_y,
+                'type' => $request->type
+            ];
+
+            $success = $gameManager->deployCard($player, $targetCell);
+
+            if ($success) {
+                return response()->json(['success' => true]);
+            } else {
+                return response()->json(['success' => false, 'error' => 'Failed to deploy card'], 400);
+            }
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'error' => $e->getMessage()], 500);
         }
-
-        $targetCell = [
-            'type' => $validated['type'],
-            'x' => $validated['x'],
-            'y' => $validated['y']
-        ];
-
-        if ($gameManager->deployCard($player, $targetCell)) {
-            return response()->json(['success' => true]);
-        }
-
-        return response()->json(['error' => 'Failed to deploy card'], 400);
     }
 
     public function moveUnit(Request $request, $gameId)
     {
-        // Валидация входных данных
-        $validated = $request->validate([
-            'unit_id' => 'required|integer',
-            'x' => 'required|integer|min:0|max:4',
-            'y' => 'required|integer|min:0|max:2',
-        ]);
+        try {
+            $game = Game::findOrFail($gameId);
 
-        $game = Game::findOrFail($gameId);
-        $gameManager = new GameManager();
+            // Получаем текущего игрока из сессии
+            $currentPlayerSide = session('current_player_side');
 
-        $unit = $game->units()->where('id', $validated['unit_id'])->first();
+            if (!$currentPlayerSide) {
+                return response()->json(['success' => false, 'error' => 'No current player'], 403);
+            }
 
-        if (!$unit) {
-            return response()->json(['error' => 'Unit not found'], 404);
+            // Проверяем, что это правильный игрок
+            $player = GamePlayer::where('game_id', $gameId)
+                ->where('side', $currentPlayerSide)
+                ->first();
+
+            if (!$player) {
+                return response()->json(['success' => false, 'error' => 'Invalid player'], 403);
+            }
+
+            // Используем сервис GameManager для перемещения юнита
+            $gameManager = new GameManager();
+
+            $success = $gameManager->moveUnit($player, $request->unit_id, $request->x, $request->y);
+
+            if ($success) {
+                return response()->json(['success' => true]);
+            } else {
+                return response()->json(['success' => false, 'error' => 'Failed to move unit'], 400);
+            }
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'error' => $e->getMessage()], 500);
         }
-
-        if ($gameManager->moveUnit($unit, $validated['x'], $validated['y'])) {
-            return response()->json(['success' => true]);
-        }
-
-        return response()->json(['error' => 'Failed to move unit'], 400);
     }
 
     public function endTurn(Request $request, $gameId)
     {
-        $game = Game::findOrFail($gameId);
-        $gameManager = new GameManager();
+        try {
+            $game = Game::findOrFail($gameId);
 
-        // Здесь должна быть логика окончания хода
-        // Например: генерация ресурсов, сброс очков перемещения и т.д.
+            // Получаем текущего игрока из сессии
+            $currentPlayerSide = session('current_player_side');
 
-        $game->current_turn++;
-        $game->save();
+            if (!$currentPlayerSide) {
+                return response()->json(['success' => false, 'error' => 'No current player'], 403);
+            }
 
-        return response()->json(['success' => true]);
+            // Используем сервис GameManager для завершения хода
+            $gameManager = new GameManager();
+
+            $success = $gameManager->endTurn($game, $currentPlayerSide);
+
+            if ($success) {
+                return response()->json(['success' => true]);
+            } else {
+                return response()->json(['success' => false, 'error' => 'Failed to end turn'], 400);
+            }
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'error' => $e->getMessage()], 500);
+        }
     }
 }

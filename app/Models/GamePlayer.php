@@ -58,8 +58,8 @@ class GamePlayer extends Model
         $pos = $this->getPosition();
         $adjacent = [];
 
-        // Направление: вверх, вниз, влево, вправо
-        foreach ([[0, -1], [0, 1], [-1, 0], [1, 0]] as [$dx, $dy]) {
+        // Направление: вверх, вниз, влево, вправо и диагонали (все 8 направлений)
+        foreach ([[0, -1], [0, 1], [-1, 0], [1, 0], [-1, -1], [-1, 1], [1, -1], [1, 1]] as [$dx, $dy]) {
             $nx = $pos['x'] + $dx;
             $ny = $pos['y'] + $dy;
 
@@ -68,6 +68,20 @@ class GamePlayer extends Model
                 $adjacent[] = ['x' => $nx, 'y' => $ny];
             }
         }
+
+        // Убираем штаб (саму точку), так как карты не могут быть размещены на штабе
+        $adjacent = array_filter($adjacent, function($cell) use ($pos) {
+            return !($cell['x'] == $pos['x'] && $cell['y'] == $pos['y']);
+        });
+
+        // Сортируем клетки для более предсказуемого порядка
+        usort($adjacent, function($a, $b) {
+            if ($a['y'] != $b['y']) {
+                return $a['y'] - $b['y'];
+            }
+            return $a['x'] - $b['x'];
+        });
+
         return $adjacent;
     }
 }

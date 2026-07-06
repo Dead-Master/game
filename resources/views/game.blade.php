@@ -9,8 +9,8 @@
     <style>
         .game-board {
             display: grid;
-            grid-template-columns: repeat(5, 240px);
-            grid-template-rows: repeat(3, 240px);
+            grid-template-columns: repeat(5, 200px);
+            grid-template-rows: repeat(3, 200px);
             gap: 9px;
             margin: 20px 0;
             /* Игровое поле начинается с левого нижнего угла */
@@ -18,8 +18,8 @@
         }
 
         .cell {
-            width: 240px;
-            height: 240px;
+            width: 200px;
+            height: 200px;
             border: 1px solid #333;
             display: flex;
             align-items: center;
@@ -101,6 +101,11 @@
             text-align: center;
             cursor: pointer;
             transition: all 0.2s ease;
+            width: 150px;
+            height: 150px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
 
         .card:hover {
@@ -134,6 +139,9 @@
 
         .player-hand {
             margin: 20px 0;
+            display: flex;
+            overflow-x: auto;
+            padding: 10px 0;
         }
     </style>
 </head>
