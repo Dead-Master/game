@@ -5,6 +5,9 @@ let selectedUnit = null;
 let selectedBaseSide = null;
 let moveTargets = new Map();
 let previewedUnitElements = new Set();
+let previewedBaseElements = new Set();
+let previewedBlockedAttackElements = new Set();
+let previewedAllowedAttackElements = new Set();
 
 document.addEventListener('DOMContentLoaded', function() {
     const gameId = getGameIdFromUrl();
@@ -232,8 +235,8 @@ function clearSelectedUnit() {
         el.classList.remove('selected-unit');
     });
 
-    document.querySelectorAll('.cell.move-allowed, .cell.move-attack, .cell.move-allowed-empty, .cell.move-too-far-empty, .cell.attack-allowed-enemy, .cell.attack-too-far-enemy').forEach(cell => {
-        cell.classList.remove('move-allowed', 'move-attack', 'move-allowed-empty', 'move-too-far-empty', 'attack-allowed-enemy', 'attack-too-far-enemy');
+    document.querySelectorAll('.cell.move-allowed, .cell.move-allowed-empty, .cell.move-too-far-empty, .cell.attack-allowed-enemy, .cell.attack-too-far-enemy').forEach(cell => {
+        cell.classList.remove('move-allowed', 'move-allowed-empty', 'move-too-far-empty', 'attack-allowed-enemy', 'attack-too-far-enemy');
     });
 }
 
@@ -258,9 +261,8 @@ function highlightMoveTargets() {
             if (isEmpty) {
                 cell.classList.add('move-too-far-empty');
             } else if (occupant.ownerSide !== currentPlayerSide) {
-                if (isAttackAllowedByType(selectedUnit.type, dx, dy)) {
+                if (!selectedUnit.hasAttacked && isAttackAllowedByType(selectedUnit.type, dx, dy)) {
                     cell.classList.add('attack-allowed-enemy');
-                    moveTargets.set(key, { x: tx, y: ty, type: 'attack-preview' });
                 } else {
                     cell.classList.add('attack-too-far-enemy');
                 }
@@ -275,8 +277,11 @@ function highlightMoveTargets() {
         }
 
         if (occupant.ownerSide !== currentPlayerSide) {
-            cell.classList.add('move-attack', 'attack-allowed-enemy');
-            moveTargets.set(key, { x: tx, y: ty, type: 'attack' });
+            if (!selectedUnit.hasAttacked && isAttackAllowedByType(selectedUnit.type, dx, dy)) {
+                cell.classList.add('attack-allowed-enemy');
+            } else {
+                cell.classList.add('attack-too-far-enemy');
+            }
         }
     });
 }
@@ -353,18 +358,76 @@ function resetUnitHearts(unitEl) {
     heartsEl.innerHTML = html;
 }
 
+function parseBaseHeartsCount(baseEl) {
+    const hpValueEl = baseEl ? baseEl.querySelector('.hp-value') : null;
+    if (!hpValueEl) return 0;
+
+    const heartsMatches = hpValueEl.textContent.match(/❤️/g);
+    return heartsMatches ? heartsMatches.length : 0;
+}
+
+function renderBaseHearts(baseEl, predictedDamage) {
+    const hpValueEl = baseEl ? baseEl.querySelector('.hp-value') : null;
+    if (!hpValueEl) return;
+
+    if (!hpValueEl.dataset.originalHearts) {
+        hpValueEl.dataset.originalHearts = hpValueEl.textContent;
+    }
+
+    const currentHp = parseBaseHeartsCount(baseEl);
+    const predictedLost = Math.min(currentHp, Math.max(0, predictedDamage));
+    const hpAfter = Math.max(0, currentHp - predictedLost);
+
+    hpValueEl.textContent = '❤️'.repeat(hpAfter);
+}
+
+function resetBaseHearts(baseEl) {
+    const hpValueEl = baseEl ? baseEl.querySelector('.hp-value') : null;
+    if (!hpValueEl) return;
+
+    if (typeof hpValueEl.dataset.originalHearts !== 'undefined') {
+        hpValueEl.textContent = hpValueEl.dataset.originalHearts;
+        delete hpValueEl.dataset.originalHearts;
+    }
+}
+
 function clearAttackPreview() {
     previewedUnitElements.forEach((el) => resetUnitHearts(el));
     previewedUnitElements.clear();
+
+    previewedBaseElements.forEach((el) => resetBaseHearts(el));
+    previewedBaseElements.clear();
+
+    previewedBlockedAttackElements.forEach((el) => resetBlockedAttackCursor(el));
+    previewedBlockedAttackElements.clear();
+
+    previewedAllowedAttackElements.forEach((el) => resetAllowedAttackCursor(el));
+    previewedAllowedAttackElements.clear();
+}
+
+function getSelectedBaseElement() {
+    if (!selectedBaseSide) return null;
+    return document.querySelector(`.player-base[data-owner-side="${selectedBaseSide}"]`);
+}
+
+function getSelectedBaseAttackPower() {
+    const baseEl = getSelectedBaseElement();
+    if (!baseEl) return 0;
+    return parseInt(baseEl.getAttribute('data-base-attack-power') || '0', 10);
+}
+
+function selectedBaseCanAttack() {
+    const baseEl = getSelectedBaseElement();
+    if (!baseEl) return false;
+    return baseEl.getAttribute('data-base-has-attacked') !== '1';
 }
 
 function bindAttackPreviewHandlers() {
     const enemyUnits = document.querySelectorAll('.board-unit');
+    const bases = document.querySelectorAll('.player-base');
 
     enemyUnits.forEach(unitEl => {
         unitEl.addEventListener('mouseenter', function () {
-            if (!selectedUnit) return;
-
             const ownerSide = this.getAttribute('data-owner-side');
             if (ownerSide === currentPlayerSide) {
                 clearAttackPreview();
@@ -382,15 +445,43 @@ function bindAttackPreviewHandlers() {
                 element: this
             };
 
+            clearAttackPreview();
+
+            if (selectedBaseSide === currentPlayerSide) {
+                if (!selectedBaseCanAttack()) {
+                    applyBlockedAttackCursor(defender.element);
+                    previewedBlockedAttackElements.add(defender.element);
+                    return;
+                }
+
+                applyAllowedAttackCursor(defender.element);
+                previewedAllowedAttackElements.add(defender.element);
+
+                const baseAttack = getSelectedBaseAttackPower();
+                if (baseAttack > 0) {
+                    renderUnitHearts(defender.element, baseAttack);
+                    previewedUnitElements.add(defender.element);
+                }
+                return;
+            }
+
+            if (!selectedUnit) return;
+
+            if (selectedUnit.hasAttacked) {
+                applyBlockedAttackCursor(defender.element);
+                previewedBlockedAttackElements.add(defender.element);
+                return;
+            }
+
             const dx = Math.abs(selectedUnit.x - defender.x);
             const dy = Math.abs(selectedUnit.y - defender.y);
 
             if (!isAttackAllowedByType(selectedUnit.type, dx, dy)) {
-                clearAttackPreview();
                 return;
             }
 
-            clearAttackPreview();
+            applyAllowedAttackCursor(defender.element);
+            previewedAllowedAttackElements.add(defender.element);
 
             const defenderWillTake = selectedUnit.attackPower;
             renderUnitHearts(defender.element, defenderWillTake);
@@ -402,13 +493,71 @@ function bindAttackPreviewHandlers() {
                 && canCounterAttackByData(defender);
 
             if (defenderCanCounter && selectedUnit.element) {
-                const attackerWillTake = defender.attackPower;
-                renderUnitHearts(selectedUnit.element, attackerWillTake);
+                renderUnitHearts(selectedUnit.element, defender.attackPower);
                 previewedUnitElements.add(selectedUnit.element);
             }
         });
 
         unitEl.addEventListener('mouseleave', function () {
+            clearAttackPreview();
+        });
+    });
+
+    bases.forEach(baseEl => {
+        baseEl.addEventListener('mouseenter', function () {
+            const ownerSide = this.getAttribute('data-owner-side');
+            if (!ownerSide || ownerSide === currentPlayerSide) {
+                clearAttackPreview();
+                return;
+            }
+
+            clearAttackPreview();
+
+            if (selectedBaseSide === currentPlayerSide) {
+                if (!selectedBaseCanAttack()) {
+                    applyBlockedAttackCursor(this);
+                    previewedBlockedAttackElements.add(this);
+                    return;
+                }
+
+                applyAllowedAttackCursor(this);
+                previewedAllowedAttackElements.add(this);
+
+                const baseAttack = getSelectedBaseAttackPower();
+                if (baseAttack > 0) {
+                    renderBaseHearts(this, baseAttack);
+                    previewedBaseElements.add(this);
+                }
+                return;
+            }
+
+            if (!selectedUnit) return;
+
+            if (selectedUnit.hasAttacked) {
+                applyBlockedAttackCursor(this);
+                previewedBlockedAttackElements.add(this);
+                return;
+            }
+
+            const baseX = parseInt(this.getAttribute('data-cell-x') || '0', 10);
+            const baseY = parseInt(this.getAttribute('data-cell-y') || '0', 10);
+            const dx = Math.abs(selectedUnit.x - baseX);
+            const dy = Math.abs(selectedUnit.y - baseY);
+
+            if (!isAttackAllowedByType(selectedUnit.type, dx, dy)) {
+                return;
+            }
+
+            applyAllowedAttackCursor(this);
+            previewedAllowedAttackElements.add(this);
+
+            if (selectedUnit.attackPower > 0) {
+                renderBaseHearts(this, selectedUnit.attackPower);
+                previewedBaseElements.add(this);
+            }
+        });
+
+        baseEl.addEventListener('mouseleave', function () {
             clearAttackPreview();
         });
     });
@@ -631,4 +780,28 @@ function updateGameView(gameId) {
         .catch(error => {
             console.error('Error updating game view:', error);
         });
+}
+
+function applyAllowedAttackCursor(el) {
+    if (!el) return;
+
+    el.style.cursor =
+        'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'36\' height=\'36\' viewBox=\'0 0 36 36\'%3E%3Ctext x=\'2\' y=\'28\' font-size=\'24\'%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3C/svg%3E") 4 28, pointer';
+}
+
+function resetAllowedAttackCursor(el) {
+    if (!el) return;
+    el.style.removeProperty('cursor');
+}
+
+function applyBlockedAttackCursor(el) {
+    if (!el) return;
+
+    el.style.cursor =
+        'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'36\' height=\'36\' viewBox=\'0 0 36 36\'%3E%3Ctext x=\'2\' y=\'28\' font-size=\'24\'%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3Cline x1=\'2\' y1=\'4\' x2=\'32\' y2=\'32\' stroke=\'%23ef4444\' stroke-width=\'3\'/%3E%3C/svg%3E") 4 28, not-allowed';
+}
+
+function resetBlockedAttackCursor(el) {
+    if (!el) return;
+    el.style.removeProperty('cursor');
 }

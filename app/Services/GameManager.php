@@ -26,15 +26,13 @@ final class GameManager
         if ($player1) {
             $player1->update(['supply_income' => 5]);
             $this->initializePlayerDeck($player1);
-            // Передаем ID игры явно при вызове
-            $this->drawCardsExplicitly($player1, self::STARTING_HAND_P1, $game->id);
+            $this->drawCardsExplicitly($player1, self::STARTING_HAND_P1);
         }
 
         if ($player2) {
             $player2->update(['supply_income' => 5]);
             $this->initializePlayerDeck($player2);
-            // Передаем ID игры явно при вызове
-            $this->drawCardsExplicitly($player2, self::STARTING_HAND_P2, $game->id);
+            $this->drawCardsExplicitly($player2, self::STARTING_HAND_P2);
         }
     }
 
@@ -68,8 +66,8 @@ final class GameManager
     public function deployCard(GamePlayer $player, array $targetCell): bool
     {
         $hand = $player->hand ?? [];
-
         $handIndex = null;
+
         foreach ($hand as $index => $card) {
             if (($card['type'] ?? null) === $targetCell['type']) {
                 $handIndex = $index;
@@ -95,11 +93,11 @@ final class GameManager
         if ($occupied) return false;
 
         $card = $hand[$handIndex];
-        $cost = match($card['type']) {
+        $cost = match ($card['type']) {
             'archer' => 3,
             'berserker' => 4,
             'infantry' => 2,
-            'scout' => 1
+            'scout' => 1,
         };
 
         if ($player->supplies_current < $cost) return false;
@@ -115,7 +113,7 @@ final class GameManager
                 'state' => 'board',
             ], $stats, [
                 'position_x' => $targetCell['x'],
-                'position_y' => $targetCell['y']
+                'position_y' => $targetCell['y'],
             ]));
 
             array_splice($hand, $handIndex, 1);
@@ -127,7 +125,6 @@ final class GameManager
 
         return true;
     }
-
 
     public function moveUnit(GamePlayer $player, int $unitId, int $targetX, int $targetY): bool
     {
@@ -157,12 +154,8 @@ final class GameManager
             ->where('position_y', $targetY)
             ->first();
 
-        if ($targetUnit && $targetUnit->owner_id === $unit->owner_id) {
+        if ($targetUnit) {
             return false;
-        }
-
-        if ($targetUnit && $targetUnit->owner_id !== $unit->owner_id) {
-            return $this->resolveCombat($unit, $targetUnit, $targetX, $targetY);
         }
 
         $distanceCost = max($dx, $dy);
@@ -233,52 +226,6 @@ final class GameManager
         return true;
     }
 
-    private function resolveCombat(Unit $attacker, Unit $defender, int $targetX, int $targetY): bool
-    {
-        DB::transaction(function () use ($attacker, $defender, $targetX, $targetY) {
-            $attackerPower = $attacker->attack_power;
-            $defenderPower = $defender->attack_power;
-
-            $defender->hp -= $attackerPower;
-            $attacker->movement_points = max(0, $attacker->movement_points - 1);
-
-            $defenderDied = $defender->hp <= 0;
-            if ($defenderDied) {
-                $defender->state = 'graveyard';
-                $defender->position_x = null;
-                $defender->position_y = null;
-                $defender->save();
-            } else {
-                $defender->save();
-            }
-
-            $canCounter = !$defenderDied
-                && $defender->canCounterAttack()
-                && $attacker->type !== 'berserker';
-
-            if ($canCounter) {
-                $attacker->hp -= $defenderPower;
-            }
-
-            if ($attacker->hp <= 0) {
-                $attacker->state = 'graveyard';
-                $attacker->position_x = null;
-                $attacker->position_y = null;
-                $attacker->save();
-                return;
-            }
-
-            if ($defenderDied) {
-                $attacker->position_x = $targetX;
-                $attacker->position_y = $targetY;
-            }
-
-            $attacker->save();
-        });
-
-        return true;
-    }
-
     private function initializePlayerDeck(GamePlayer $player): void
     {
         $deck = [];
@@ -319,9 +266,9 @@ final class GameManager
         return $adjacent;
     }
 
-    private function drawCardsExplicitly(GamePlayer $player, int $count, int $gameId): void
+    private function drawCardsExplicitly(GamePlayer $player, int $count): void
     {
-        $deck = $player->deck;
+        $deck = $player->deck ?? [];
         $hand = [];
 
         for ($i = 0; $i < $count; $i++) {
@@ -331,22 +278,10 @@ final class GameManager
             }
         }
 
-        // Обновляем JSON поля игрока
         $player->update([
             'hand' => $hand,
-            'deck' => $deck,
+            'deck' => array_values($deck),
         ]);
-
-        // Создаем сущности юнитов для фронтенда
-        foreach ($hand as $card) {
-            Unit::create([
-                'game_id' => $gameId,
-                'owner_id' => $player->id,
-                'type' => $card['type'],
-                ...Unit::fromCardType($card['type']),
-                'state' => 'hand',
-            ]);
-        }
     }
 
     public function attackUnit(GamePlayer $player, int $attackerUnitId, int $targetUnitId): bool

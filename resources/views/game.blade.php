@@ -83,9 +83,9 @@
         }
 
         .player-base {
-            width: 150px;
-            height: 150px;
-            border-radius: 50%;
+            width: 180px;
+            height: 180px;
+            border-radius: 12px;
             display: flex;
             align-items: flex-start;
             justify-content: flex-start;
@@ -95,6 +95,7 @@
             padding: 9px;
             cursor: pointer;
             border: 2px solid transparent;
+            box-sizing: border-box;
         }
 
         .player-1-base {
@@ -113,12 +114,19 @@
             gap: 3px;
         }
 
+        .base-content--top {
+            width: 100%;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
         .sword {
-            font-size: 48px;
+            font-size: 18px;
+            line-height: 1;
         }
 
         .attack-value {
-            font-size: 28px;
+            font-size: 36px;
             font-weight: bold;
         }
 
@@ -134,9 +142,14 @@
             max-width: 120px;
         }
 
-        .supplies {
-            font-size: 20px;
-            margin-top: 5px;
+        .supplies-icons {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 2px;
+            max-width: 62px;
+            font-size: 16px;
+            line-height: 1;
         }
 
         .board-unit {
@@ -200,6 +213,17 @@
             filter: grayscale(0.5);
         }
 
+        .movement-wrap {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .movement-wrap.faded {
+            opacity: 0.35;
+            filter: grayscale(0.5);
+        }
+
         .selected-unit {
             border-color: #f59e0b !important;
             box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.35);
@@ -207,11 +231,6 @@
 
         .cell.move-allowed {
             outline: 4px solid #22c55e;
-            outline-offset: -4px;
-        }
-
-        .cell.move-attack {
-            outline: 4px solid #ef4444;
             outline-offset: -4px;
         }
 
@@ -229,6 +248,11 @@
 
         .cell.attack-too-far-enemy {
             cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Ctext x='2' y='28' font-size='24'%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3Cline x1='2' y1='4' x2='32' y2='32' stroke='%23ef4444' stroke-width='3'/%3E%3C/svg%3E") 4 28, not-allowed;
+        }
+
+        .cell.move-attack {
+            outline: 4px solid #ef4444;
+            outline-offset: -4px;
         }
 
         .hands-row {
@@ -365,8 +389,9 @@
 
                             @if ($unit)
                                 @php
-                                    $swordFaded = ($unit->has_counter_attacked_this_turn ?? false)
-                                        || ($unit->type === 'berserker' && ($unit->has_attacked_this_turn ?? false));
+                                    $swordFaded = (bool)($unit->has_attacked_this_turn ?? false)
+                                        || (bool)($unit->has_counter_attacked_this_turn ?? false);
+                                    $movementFaded = ((int)($unit->movement_points ?? 0) <= 0);
                                 @endphp
                                 <div
                                     class="board-unit {{ $unitSideClass }}"
@@ -393,38 +418,62 @@
                                             <span>⚔️</span>
                                             <span>{{ $unit->attack_power }}</span>
                                         </span>
-                                        <span> | 👣 {{ $unit->movement_points }}</span>
+                                        <span> | </span>
+                                        <span class="movement-wrap {{ $movementFaded ? 'faded' : '' }}">
+                                            <span>🐎</span>
+                                            <span>{{ $unit->movement_points }}</span>
+                                        </span>
                                     </div>
                                 </div>
                             @elseif ($x === 0 && $y === 0)
+                                @php
+                                    $base1SwordFaded = (bool)($player1->base_has_attacked_this_turn ?? false);
+                                    $base1Supplies = max(0, (int)($player1->supplies_current ?? 0));
+                                @endphp
                                 <div class="player-base player-1-base"
                                      data-cell-x="0"
                                      data-cell-y="0"
-                                     data-owner-side="player_1">
-                                    <div class="base-content">
-                                        <div class="sword">⚔️</div>
-                                        <div class="attack-value">{{ $player1->base_attack ?? 1 }}</div>
+                                     data-owner-side="player_1"
+                                     data-base-attack-power="{{ $player1->base_attack ?? 1 }}"
+                                     data-base-has-attacked="{{ $base1SwordFaded ? '1' : '0' }}">
+                                    <div class="base-content base-content--top">
+                                        <span class="sword-wrap {{ $base1SwordFaded ? 'faded' : '' }}">
+                                            <span class="sword">⚔️</span>
+                                            <span class="attack-value">{{ $player1->base_attack ?? 1 }}</span>
+                                        </span>
+                                        <span class="supplies-icons" title="Припасы: {{ $base1Supplies }}">
+                                            {{ str_repeat('🌾', $base1Supplies) }}
+                                        </span>
                                     </div>
                                     <div class="base-content">
                                         <div class="heart">❤️</div>
                                         <div class="hp-value">{{ str_repeat('❤️', max(0, (int)($player1->base_hp ?? 0))) }}</div>
                                     </div>
-                                    <div class="supplies">Припасы: {{ $player1->supplies_current ?? 0 }}</div>
                                 </div>
                             @elseif ($x === 4 && $y === 2)
+                                @php
+                                    $base2SwordFaded = (bool)($player2->base_has_attacked_this_turn ?? false);
+                                    $base2Supplies = max(0, (int)($player2->supplies_current ?? 0));
+                                @endphp
                                 <div class="player-base player-2-base"
                                      data-cell-x="4"
                                      data-cell-y="2"
-                                     data-owner-side="player_2">
-                                    <div class="base-content">
-                                        <div class="sword">⚔️</div>
-                                        <div class="attack-value">{{ $player2->base_attack ?? 1 }}</div>
+                                     data-owner-side="player_2"
+                                     data-base-attack-power="{{ $player2->base_attack ?? 1 }}"
+                                     data-base-has-attacked="{{ $base2SwordFaded ? '1' : '0' }}">
+                                    <div class="base-content base-content--top">
+                                        <span class="sword-wrap {{ $base2SwordFaded ? 'faded' : '' }}">
+                                            <span class="sword">⚔️</span>
+                                            <span class="attack-value">{{ $player2->base_attack ?? 1 }}</span>
+                                        </span>
+                                        <span class="supplies-icons" title="Припасы: {{ $base2Supplies }}">
+                                            {{ str_repeat('🌾', $base2Supplies) }}
+                                        </span>
                                     </div>
                                     <div class="base-content">
                                         <div class="heart">❤️</div>
                                         <div class="hp-value">{{ str_repeat('❤️', max(0, (int)($player2->base_hp ?? 0))) }}</div>
                                     </div>
-                                    <div class="supplies">Припасы: {{ $player2->supplies_current ?? 0 }}</div>
                                 </div>
                             @endif
                         </div>
