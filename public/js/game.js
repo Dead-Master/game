@@ -235,8 +235,8 @@ function clearSelectedUnit() {
         el.classList.remove('selected-unit');
     });
 
-    document.querySelectorAll('.cell.move-allowed, .cell.move-allowed-empty, .cell.move-too-far-empty, .cell.attack-allowed-enemy, .cell.attack-too-far-enemy').forEach(cell => {
-        cell.classList.remove('move-allowed', 'move-allowed-empty', 'move-too-far-empty', 'attack-allowed-enemy', 'attack-too-far-enemy');
+    document.querySelectorAll('.cell.move-allowed, .cell.move-allowed-empty, .cell.move-too-far-empty, .cell.attack-allowed-enemy, .cell.attack-too-far-enemy, .cell.attack-allowed-ranged-enemy, .cell.attack-blocked-ranged-enemy').forEach(cell => {
+        cell.classList.remove('move-allowed', 'move-allowed-empty', 'move-too-far-empty', 'attack-allowed-enemy', 'attack-too-far-enemy', 'attack-allowed-ranged-enemy', 'attack-blocked-ranged-enemy');
     });
 }
 
@@ -261,10 +261,18 @@ function highlightMoveTargets() {
             if (isEmpty) {
                 cell.classList.add('move-too-far-empty');
             } else if (occupant.ownerSide !== currentPlayerSide) {
-                if (!selectedUnit.hasAttacked && isAttackAllowedByType(selectedUnit.type, dx, dy)) {
-                    cell.classList.add('attack-allowed-enemy');
+                if (selectedUnit.type === 'archer') {
+                    if (selectedUnit.hasAttacked) {
+                        cell.classList.add('attack-blocked-ranged-enemy');
+                    } else {
+                        cell.classList.add('attack-allowed-ranged-enemy');
+                    }
                 } else {
-                    cell.classList.add('attack-too-far-enemy');
+                    if (!selectedUnit.hasAttacked && isAttackAllowedByType(selectedUnit.type, dx, dy)) {
+                        cell.classList.add('attack-allowed-enemy');
+                    } else {
+                        cell.classList.add('attack-too-far-enemy');
+                    }
                 }
             }
             return;
@@ -277,10 +285,18 @@ function highlightMoveTargets() {
         }
 
         if (occupant.ownerSide !== currentPlayerSide) {
-            if (!selectedUnit.hasAttacked && isAttackAllowedByType(selectedUnit.type, dx, dy)) {
-                cell.classList.add('attack-allowed-enemy');
+            if (selectedUnit.type === 'archer') {
+                if (selectedUnit.hasAttacked) {
+                    cell.classList.add('attack-blocked-ranged-enemy');
+                } else {
+                    cell.classList.add('attack-allowed-ranged-enemy');
+                }
             } else {
-                cell.classList.add('attack-too-far-enemy');
+                if (!selectedUnit.hasAttacked && isAttackAllowedByType(selectedUnit.type, dx, dy)) {
+                    cell.classList.add('attack-allowed-enemy');
+                } else {
+                    cell.classList.add('attack-too-far-enemy');
+                }
             }
         }
     });
@@ -422,6 +438,104 @@ function selectedBaseCanAttack() {
     return baseEl.getAttribute('data-base-has-attacked') !== '1';
 }
 
+function getUnitElementById(unitId) {
+    return document.querySelector(`.board-unit[data-unit-id="${unitId}"]`);
+}
+
+function getElementCenter(el) {
+    const rect = el.getBoundingClientRect();
+    return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2
+    };
+}
+
+function animateArrowFlight(fromEl, toEl) {
+    return new Promise((resolve) => {
+        if (!fromEl || !toEl) {
+            resolve();
+            return;
+        }
+
+        const from = getElementCenter(fromEl);
+        const to = getElementCenter(toEl);
+        const angle = Math.atan2(to.y - from.y, to.x - from.x) * 180 / Math.PI;
+        const durationMs = 650;
+
+        const arrow = document.createElement('div');
+        arrow.textContent = '➤';
+        arrow.style.position = 'fixed';
+        arrow.style.left = `${from.x}px`;
+        arrow.style.top = `${from.y}px`;
+        arrow.style.fontSize = '28px';
+        arrow.style.lineHeight = '1';
+        arrow.style.pointerEvents = 'none';
+        arrow.style.zIndex = '9999';
+        arrow.style.transform = `translate(-50%, -50%) rotate(${angle}deg)`;
+        arrow.style.transition = `left ${durationMs}ms linear, top ${durationMs}ms linear, opacity ${durationMs}ms linear`;
+        arrow.style.opacity = '1';
+        arrow.style.filter = 'drop-shadow(0 0 2px rgba(0,0,0,0.45))';
+
+        document.body.appendChild(arrow);
+
+        requestAnimationFrame(() => {
+            arrow.style.left = `${to.x}px`;
+            arrow.style.top = `${to.y}px`;
+            arrow.style.opacity = '0.35';
+        });
+
+        setTimeout(() => {
+            arrow.remove();
+            resolve();
+        }, durationMs + 20);
+    });
+}
+
+function animateMeleeStrike(fromEl, toEl) {
+    return new Promise((resolve) => {
+        if (!fromEl || !toEl) {
+            resolve();
+            return;
+        }
+
+        const from = getElementCenter(fromEl);
+        const to = getElementCenter(toEl);
+
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const distance = Math.hypot(dx, dy);
+
+        if (distance < 1) {
+            resolve();
+            return;
+        }
+
+        const maxLungePx = 40;
+        const lunge = Math.min(maxLungePx, Math.max(18, distance * 0.28));
+        const nx = dx / distance;
+        const ny = dy / distance;
+
+        const shiftX = nx * lunge;
+        const shiftY = ny * lunge;
+
+        const originalTransform = fromEl.style.transform || '';
+        const originalTransition = fromEl.style.transition || '';
+
+        fromEl.style.transition = 'transform 120ms ease-out';
+        fromEl.style.transform = `${originalTransform} translate(${shiftX}px, ${shiftY}px)`;
+
+        setTimeout(() => {
+            fromEl.style.transition = 'transform 140ms ease-in';
+            fromEl.style.transform = originalTransform;
+
+            setTimeout(() => {
+                fromEl.style.transition = originalTransition;
+                resolve();
+            }, 150);
+        }, 125);
+    });
+}
+
 function bindAttackPreviewHandlers() {
     const enemyUnits = document.querySelectorAll('.board-unit');
     const bases = document.querySelectorAll('.player-base');
@@ -449,12 +563,12 @@ function bindAttackPreviewHandlers() {
 
             if (selectedBaseSide === currentPlayerSide) {
                 if (!selectedBaseCanAttack()) {
-                    applyBlockedAttackCursor(defender.element);
+                    applyBlockedRangedAttackCursor(defender.element);
                     previewedBlockedAttackElements.add(defender.element);
                     return;
                 }
 
-                applyAllowedAttackCursor(defender.element);
+                applyAllowedRangedAttackCursor(defender.element);
                 previewedAllowedAttackElements.add(defender.element);
 
                 const baseAttack = getSelectedBaseAttackPower();
@@ -468,7 +582,11 @@ function bindAttackPreviewHandlers() {
             if (!selectedUnit) return;
 
             if (selectedUnit.hasAttacked) {
-                applyBlockedAttackCursor(defender.element);
+                if (selectedUnit.type === 'archer') {
+                    applyBlockedRangedAttackCursor(defender.element);
+                } else {
+                    applyBlockedAttackCursor(defender.element);
+                }
                 previewedBlockedAttackElements.add(defender.element);
                 return;
             }
@@ -480,7 +598,11 @@ function bindAttackPreviewHandlers() {
                 return;
             }
 
-            applyAllowedAttackCursor(defender.element);
+            if (selectedUnit.type === 'archer') {
+                applyAllowedRangedAttackCursor(defender.element);
+            } else {
+                applyAllowedAttackCursor(defender.element);
+            }
             previewedAllowedAttackElements.add(defender.element);
 
             const defenderWillTake = selectedUnit.attackPower;
@@ -515,12 +637,12 @@ function bindAttackPreviewHandlers() {
 
             if (selectedBaseSide === currentPlayerSide) {
                 if (!selectedBaseCanAttack()) {
-                    applyBlockedAttackCursor(this);
+                    applyBlockedRangedAttackCursor(this);
                     previewedBlockedAttackElements.add(this);
                     return;
                 }
 
-                applyAllowedAttackCursor(this);
+                applyAllowedRangedAttackCursor(this);
                 previewedAllowedAttackElements.add(this);
 
                 const baseAttack = getSelectedBaseAttackPower();
@@ -534,7 +656,11 @@ function bindAttackPreviewHandlers() {
             if (!selectedUnit) return;
 
             if (selectedUnit.hasAttacked) {
-                applyBlockedAttackCursor(this);
+                if (selectedUnit.type === 'archer') {
+                    applyBlockedRangedAttackCursor(this);
+                } else {
+                    applyBlockedAttackCursor(this);
+                }
                 previewedBlockedAttackElements.add(this);
                 return;
             }
@@ -548,7 +674,11 @@ function bindAttackPreviewHandlers() {
                 return;
             }
 
-            applyAllowedAttackCursor(this);
+            if (selectedUnit.type === 'archer') {
+                applyAllowedRangedAttackCursor(this);
+            } else {
+                applyAllowedAttackCursor(this);
+            }
             previewedAllowedAttackElements.add(this);
 
             if (selectedUnit.attackPower > 0) {
@@ -659,18 +789,43 @@ function moveUnit(gameId, unitId, targetX, targetY) {
 }
 
 function attackUnit(gameId, attackerUnitId, targetUnitId) {
-    fetch(`/api/games/${gameId}/attack-unit`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
-        },
-        body: JSON.stringify({
-            side: currentPlayerSide,
-            attacker_unit_id: attackerUnitId,
-            target_unit_id: targetUnitId
-        })
-    })
+    const attackerEl = getUnitElementById(attackerUnitId);
+    const targetEl = getUnitElementById(targetUnitId);
+
+    const selectedIsAttacker = !!(selectedUnit && selectedUnit.unitId === attackerUnitId);
+    const attackAlreadyUsed = !!(selectedIsAttacker && selectedUnit.hasAttacked);
+
+    if (attackAlreadyUsed) {
+        return;
+    }
+
+    const isArcherShot = !!(
+        selectedIsAttacker &&
+        selectedUnit.type === 'archer'
+    );
+
+    const isMeleeHit = !!(
+        selectedIsAttacker &&
+        selectedUnit.type !== 'archer'
+    );
+
+    const animation = isArcherShot
+        ? animateArrowFlight(attackerEl, targetEl)
+        : (isMeleeHit ? animateMeleeStrike(attackerEl, targetEl) : Promise.resolve());
+
+    animation
+        .then(() => fetch(`/api/games/${gameId}/attack-unit`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+            },
+            body: JSON.stringify({
+                side: currentPlayerSide,
+                attacker_unit_id: attackerUnitId,
+                target_unit_id: targetUnitId
+            })
+        }))
         .then(response => response.json())
         .then(data => {
             if (data.success) {
@@ -686,17 +841,25 @@ function attackUnit(gameId, attackerUnitId, targetUnitId) {
 }
 
 function attackWithBase(gameId, targetUnitId) {
-    fetch(`/api/games/${gameId}/attack-base`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
-        },
-        body: JSON.stringify({
-            side: currentPlayerSide,
-            target_unit_id: targetUnitId
-        })
-    })
+    if (selectedBaseSide === currentPlayerSide && !selectedBaseCanAttack()) {
+        return;
+    }
+
+    const baseEl = getSelectedBaseElement();
+    const targetEl = getUnitElementById(targetUnitId);
+
+    animateArrowFlight(baseEl, targetEl)
+        .then(() => fetch(`/api/games/${gameId}/attack-base`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+            },
+            body: JSON.stringify({
+                side: currentPlayerSide,
+                target_unit_id: targetUnitId
+            })
+        }))
         .then(response => response.json())
         .then(data => {
             if (data.success) {
@@ -721,14 +884,45 @@ function attackBase(gameId, targetSide, attackerUnitId) {
         payload.attacker_unit_id = attackerUnitId;
     }
 
-    fetch(`/api/games/${gameId}/attack-base`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
-        },
-        body: JSON.stringify(payload)
-    })
+    const targetBaseEl = document.querySelector(`.player-base[data-owner-side="${targetSide}"]`);
+    const isBaseShot = !attackerUnitId;
+
+    if (isBaseShot && selectedBaseSide === currentPlayerSide && !selectedBaseCanAttack()) {
+        return;
+    }
+
+    const selectedIsAttacker = !!(attackerUnitId && selectedUnit && selectedUnit.unitId === attackerUnitId);
+    if (selectedIsAttacker && selectedUnit.hasAttacked) {
+        return;
+    }
+
+    const isArcherShot = !!(
+        selectedIsAttacker &&
+        selectedUnit.type === 'archer'
+    );
+
+    const isMeleeHit = !!(
+        selectedIsAttacker &&
+        selectedUnit.type !== 'archer'
+    );
+
+    const sourceEl = isBaseShot
+        ? getSelectedBaseElement()
+        : getUnitElementById(attackerUnitId);
+
+    const animation = isBaseShot
+        ? animateArrowFlight(sourceEl, targetBaseEl)
+        : (isArcherShot ? animateArrowFlight(sourceEl, targetBaseEl) : (isMeleeHit ? animateMeleeStrike(sourceEl, targetBaseEl) : Promise.resolve()));
+
+    animation
+        .then(() => fetch(`/api/games/${gameId}/attack-base`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+            },
+            body: JSON.stringify(payload)
+        }))
         .then(response => response.json())
         .then(data => {
             if (data.success) {
@@ -784,9 +978,12 @@ function updateGameView(gameId) {
 
 function applyAllowedAttackCursor(el) {
     if (!el) return;
+    el.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'36\' height=\'36\' viewBox=\'0 0 36 36\'%3E%3Ctext x=\'2\' y=\'28\' font-size=\'24\'%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3C/svg%3E") 4 28, pointer';
+}
 
-    el.style.cursor =
-        'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'36\' height=\'36\' viewBox=\'0 0 36 36\'%3E%3Ctext x=\'2\' y=\'28\' font-size=\'24\'%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3C/svg%3E") 4 28, pointer';
+function applyAllowedRangedAttackCursor(el) {
+    if (!el) return;
+    el.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'36\' height=\'36\' viewBox=\'0 0 36 36\'%3E%3Ctext x=\'2\' y=\'28\' font-size=\'24\'%3E%F0%9F%8F%B9%3C/text%3E%3C/svg%3E") 4 28, pointer';
 }
 
 function resetAllowedAttackCursor(el) {
@@ -796,9 +993,12 @@ function resetAllowedAttackCursor(el) {
 
 function applyBlockedAttackCursor(el) {
     if (!el) return;
+    el.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'36\' height=\'36\' viewBox=\'0 0 36 36\'%3E%3Ctext x=\'2\' y=\'28\' font-size=\'24\'%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3Cline x1=\'2\' y1=\'4\' x2=\'32\' y2=\'32\' stroke=\'%23ef4444\' stroke-width=\'3\'/%3E%3C/svg%3E") 4 28, not-allowed';
+}
 
-    el.style.cursor =
-        'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'36\' height=\'36\' viewBox=\'0 0 36 36\'%3E%3Ctext x=\'2\' y=\'28\' font-size=\'24\'%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3Cline x1=\'2\' y1=\'4\' x2=\'32\' y2=\'32\' stroke=\'%23ef4444\' stroke-width=\'3\'/%3E%3C/svg%3E") 4 28, not-allowed';
+function applyBlockedRangedAttackCursor(el) {
+    if (!el) return;
+    el.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'36\' height=\'36\' viewBox=\'0 0 36 36\'%3E%3Ctext x=\'2\' y=\'28\' font-size=\'24\'%3E%F0%9F%8F%B9%3C/text%3E%3Cline x1=\'2\' y1=\'4\' x2=\'32\' y2=\'32\' stroke=\'%23ef4444\' stroke-width=\'3\'/%3E%3C/svg%3E") 4 28, not-allowed';
 }
 
 function resetBlockedAttackCursor(el) {

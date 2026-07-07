@@ -14,7 +14,7 @@
         }
 
         .main-column {
-            flex: 1;
+            flex: 1 1 0;
             min-width: 0;
         }
 
@@ -115,7 +115,7 @@
         }
 
         .base-content--top {
-            width: 100%;
+            width: 180px;
             justify-content: space-between;
             align-items: flex-start;
         }
@@ -248,6 +248,14 @@
 
         .cell.attack-too-far-enemy {
             cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Ctext x='2' y='28' font-size='24'%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3Cline x1='2' y1='4' x2='32' y2='32' stroke='%23ef4444' stroke-width='3'/%3E%3C/svg%3E") 4 28, not-allowed;
+        }
+
+        .cell.attack-allowed-ranged-enemy {
+            cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Ctext x='2' y='28' font-size='24'%3E%F0%9F%8F%B9%3C/text%3E%3C/svg%3E") 4 28, pointer;
+        }
+
+        .cell.attack-blocked-ranged-enemy {
+            cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Ctext x='2' y='28' font-size='24'%3E%F0%9F%8F%B9%3C/text%3E%3Cline x1='2' y1='4' x2='32' y2='32' stroke='%23ef4444' stroke-width='3'/%3E%3C/svg%3E") 4 28, not-allowed;
         }
 
         .cell.move-attack {
