@@ -21,6 +21,7 @@ class GamePlayer extends Model
         'base_has_attacked_this_turn',
         'hand',
         'deck',
+        'type',
     ];
 
     protected $casts = [
