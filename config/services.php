@@ -35,4 +35,12 @@ return [
         ],
     ],
 
+    'bot_service' => [
+        'enabled' => env('BOT_SERVICE_ENABLED', false),
+        'base_url' => env('BOT_SERVICE_BASE_URL'),
+        'token' => env('BOT_SERVICE_TOKEN'),
+        'timeout_seconds' => (int) env('BOT_SERVICE_TIMEOUT_SECONDS', 8),
+        'side' => env('BOT_SIDE', 'player_2'),
+    ],
+
 ];

@@ -14,8 +14,9 @@ class Game extends Model
         'current_turn',
         'round_number',
         'grid_state',
-        'player_1_name', // Добавлено
-        'player_2_name', // Добавлено
+        'player_1_name',
+        'player_2_name',
+        'bot_strategy',
     ];
 
     protected $casts = [
@@ -37,5 +38,10 @@ class Game extends Model
     public function getActiveSide(string $side): GamePlayer
     {
         return $this->players()->where('side', $side)->firstOrFail();
+    }
+
+    public function events(): HasMany
+    {
+        return $this->hasMany(GameEvent::class);
     }
 }

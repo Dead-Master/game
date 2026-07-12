@@ -1,0 +1,14 @@
+{
+    "lookahead_alpha": 0.45,
+    "future_eval_scale": 1.0,
+    "scale_attack_unit": 1.0,
+    "scale_attack_base_with_unit": 1.0,
+    "scale_attack_with_base": 1.0,
+    "scale_attack_base_with_base": 1.0,
+    "scale_deploy": 1.0,
+    "scale_move": 1.0,
+    "eval_base_hp_weight": 5.0,
+    "eval_unit_hp_weight": 1.2,
+    "eval_unit_attack_weight": 1.7,
+    "eval_tempo_weight": 0.8
+}

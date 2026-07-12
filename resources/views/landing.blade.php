@@ -13,7 +13,17 @@
     <form action="{{ route('game.create') }}" method="POST">
         @csrf
         <input type="text" name="player_1_name" placeholder="Имя игрока 1" required>
-        <input type="text" name="player_2_name" placeholder="Имя игрока 2" required>
+        <input type="text" name="player_2_name" placeholder="Имя игрока 2 (бот)" value="Bot" required>
+
+        <label for="bot_strategy">Стратегия бота:</label>
+        <select id="bot_strategy" name="bot_strategy">
+            <option value="ai_agent_v3" selected>ai_agent_v3</option>
+            <option value="focus_base">focus_base</option>
+            <option value="scripted">scripted</option>
+            <option value="codex_v2">codex_v2</option>
+            <option value="codex_v1">codex_v1</option>
+        </select>
+
         <button type="submit">Создать игру</button>
     </form>
 </div>

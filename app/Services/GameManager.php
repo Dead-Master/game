@@ -128,46 +128,97 @@ final class GameManager
 
     public function moveUnit(GamePlayer $player, int $unitId, int $targetX, int $targetY): bool
     {
-        $unit = Unit::query()
-            ->where('id', $unitId)
-            ->where('game_id', $player->game_id)
-            ->where('owner_id', $player->id)
-            ->where('state', 'board')
-            ->first();
+        $result = $this->moveUnitWithAudit($player, $unitId, $targetX, $targetY);
 
-        if (!$unit) return false;
-        if ($targetX < 0 || $targetX > 4 || $targetY < 0 || $targetY > 2) return false;
-        if ($unit->movement_points <= 0) return false;
-        if ($unit->position_x === $targetX && $unit->position_y === $targetY) return false;
+        return is_array($result);
+    }
 
-        $dx = abs($unit->position_x - $targetX);
-        $dy = abs($unit->position_y - $targetY);
-
-        if (!$this->isMoveAllowedByType($unit, $dx, $dy)) {
+    /**
+     * @return array{
+     *     from: array{x:int,y:int},
+     *     to: array{x:int,y:int},
+     *     movement_points_before: int,
+     *     movement_points_after: int
+     * }|false
+     */
+    public function moveUnitWithAudit(GamePlayer $player, int $unitId, int $targetX, int $targetY): array|false
+    {
+        if ($targetX < 0 || $targetX > 4 || $targetY < 0 || $targetY > 2) {
             return false;
         }
 
-        $targetUnit = Unit::query()
-            ->where('game_id', $unit->game_id)
-            ->where('state', 'board')
-            ->where('position_x', $targetX)
-            ->where('position_y', $targetY)
-            ->first();
-
-        if ($targetUnit) {
+        if ($this->isBaseCell($targetX, $targetY)) {
             return false;
         }
 
-        $distanceCost = max($dx, $dy);
+        return DB::transaction(function () use ($player, $unitId, $targetX, $targetY): array|false {
+            $unit = Unit::query()
+                ->where('id', $unitId)
+                ->where('game_id', $player->game_id)
+                ->where('owner_id', $player->id)
+                ->where('state', 'board')
+                ->lockForUpdate()
+                ->first();
 
-        DB::transaction(function () use ($unit, $targetX, $targetY, $distanceCost) {
+            if (!$unit) {
+                return false;
+            }
+
+            if ($unit->position_x === $targetX && $unit->position_y === $targetY) {
+                return false;
+            }
+
+            $dx = abs((int) $unit->position_x - $targetX);
+            $dy = abs((int) $unit->position_y - $targetY);
+
+            if (!$this->isMoveAllowedByType($unit, $dx, $dy)) {
+                return false;
+            }
+
+            $distanceCost = max($dx, $dy);
+            $movementPointsBefore = (int) $unit->movement_points;
+
+            if ($movementPointsBefore <= 0 || $movementPointsBefore < $distanceCost) {
+                return false;
+            }
+
+            $targetOccupied = Unit::query()
+                ->where('game_id', $unit->game_id)
+                ->where('state', 'board')
+                ->where('position_x', $targetX)
+                ->where('position_y', $targetY)
+                ->lockForUpdate()
+                ->exists();
+
+            if ($targetOccupied) {
+                return false;
+            }
+
+            $from = [
+                'x' => (int) $unit->position_x,
+                'y' => (int) $unit->position_y,
+            ];
+
             $unit->position_x = $targetX;
             $unit->position_y = $targetY;
-            $unit->movement_points = max(0, $unit->movement_points - $distanceCost);
+            $unit->movement_points = max(0, $movementPointsBefore - $distanceCost);
             $unit->save();
-        });
 
-        return true;
+            return [
+                'from' => $from,
+                'to' => [
+                    'x' => $targetX,
+                    'y' => $targetY,
+                ],
+                'movement_points_before' => $movementPointsBefore,
+                'movement_points_after' => (int) $unit->movement_points,
+            ];
+        }, 3);
+    }
+
+    private function isBaseCell(int $x, int $y): bool
+    {
+        return ($x === 0 && $y === 0) || ($x === 4 && $y === 2);
     }
 
     private function isMoveAllowedByType(Unit $unit, int $dx, int $dy): bool

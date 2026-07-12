@@ -1,6 +1,7 @@
 // JavaScript для игры
 
 let currentPlayerSide = 'player_1';
+const LOCAL_PLAYER_SIDE = 'player_1';
 let selectedUnit = null;
 let selectedBaseSide = null;
 let moveTargets = new Map();
@@ -8,6 +9,11 @@ let previewedUnitElements = new Set();
 let previewedBaseElements = new Set();
 let previewedBlockedAttackElements = new Set();
 let previewedAllowedAttackElements = new Set();
+
+let wsUpdateQueue = [];
+let wsQueueProcessing = false;
+let lastAppliedSequence = 0;
+const WS_QUEUE_DELAY_MS = 1500;
 
 document.addEventListener('DOMContentLoaded', function() {
     const gameId = getGameIdFromUrl();
@@ -17,6 +23,15 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
     }
 
+    rebindGameInteractions(gameId);
+    connectGameUpdatesWs(gameId);
+
+    if (window.BotRunner && typeof window.BotRunner.maybeRunBotTurn === 'function') {
+        setTimeout(() => window.BotRunner.maybeRunBotTurn(gameId), 250);
+    }
+});
+
+function rebindGameInteractions(gameId) {
     const gameElement = document.querySelector('#game-container');
     if (gameElement && gameElement.getAttribute('data-current-player-side')) {
         currentPlayerSide = gameElement.getAttribute('data-current-player-side');
@@ -25,7 +40,429 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeGameField(gameId);
     setupEventListeners(gameId);
     bindAttackPreviewHandlers();
-});
+    initBotToggleUI(gameId);
+    syncEndTurnButtonState();
+}
+
+function syncEndTurnButtonState() {
+    const btn = document.getElementById('end-turn-btn');
+    if (!btn) return;
+
+    const isMyTurn = currentPlayerSide === LOCAL_PLAYER_SIDE;
+    const botTurnInProgress = wsQueueProcessing || wsUpdateQueue.length > 0;
+
+    btn.disabled = !isMyTurn || botTurnInProgress;
+}
+
+function isBaseCell(x, y) {
+    return (x === 0 && y === 0) || (x === 4 && y === 2);
+}
+
+function connectGameUpdatesWs(gameId) {
+    const root = document.getElementById('game-container');
+    if (!root || !window.Pusher) return;
+
+    const wsKey = root.getAttribute('data-ws-key');
+    const wsHost = root.getAttribute('data-ws-host');
+    const wsPort = Number(root.getAttribute('data-ws-port') || 8080);
+    const wsScheme = root.getAttribute('data-ws-scheme') || 'http';
+
+    if (!wsKey || !wsHost) return;
+
+    const forceTLS = wsScheme === 'https';
+
+    const pusher = new window.Pusher(wsKey, {
+        wsHost: wsHost,
+        wsPort: wsPort,
+        wssPort: wsPort,
+        forceTLS: forceTLS,
+        enabledTransports: ['ws', 'wss'],
+        disableStats: true,
+        cluster: 'mt1',
+    });
+
+    const channel = pusher.subscribe(`game.${gameId}`);
+
+    channel.bind('game.updated', function (eventPayload) {
+        enqueueGameUpdate(gameId, eventPayload || {});
+    });
+}
+
+function enqueueGameUpdate(gameId, eventPayload) {
+    const sequence = Number(eventPayload?.sequence || 0);
+    const actorSide = String(eventPayload?.actor_side || '');
+
+    if (sequence > 0 && sequence <= lastAppliedSequence) {
+        return;
+    }
+
+    if (actorSide === LOCAL_PLAYER_SIDE) {
+        if (sequence > 0) {
+            lastAppliedSequence = Math.max(lastAppliedSequence, sequence);
+        }
+        return;
+    }
+
+    wsUpdateQueue.push({
+        gameId,
+        sequence,
+        eventType: String(eventPayload?.event_type || ''),
+        payload: eventPayload?.payload && typeof eventPayload.payload === 'object' ? eventPayload.payload : {},
+        actorSide,
+    });
+
+    syncEndTurnButtonState();
+    processGameUpdateQueue();
+}
+
+async function processGameUpdateQueue() {
+    if (wsQueueProcessing) return;
+    wsQueueProcessing = true;
+    syncEndTurnButtonState();
+
+    try {
+        while (wsUpdateQueue.length > 0) {
+            const item = wsUpdateQueue.shift();
+
+            if (item.sequence > 0 && item.sequence <= lastAppliedSequence) {
+                continue;
+            }
+
+            await applyLiveEventToDom(item);
+
+            if (item.sequence > 0) {
+                lastAppliedSequence = Math.max(lastAppliedSequence, item.sequence);
+            }
+
+            syncEndTurnButtonState();
+            await delay(WS_QUEUE_DELAY_MS);
+        }
+
+        const gameId = getGameIdFromUrl();
+        if (gameId) {
+            await updateGameView(gameId);
+        }
+    } finally {
+        wsQueueProcessing = false;
+        syncEndTurnButtonState();
+    }
+}
+
+function resolveActorSide(item) {
+    if (item.actorSide === 'player_1' || item.actorSide === 'player_2') {
+        return item.actorSide;
+    }
+
+    const payloadActor = String(item?.payload?.actor_side || '');
+    if (payloadActor === 'player_1' || payloadActor === 'player_2') {
+        return payloadActor;
+    }
+
+    return null;
+}
+
+async function animateLiveBaseToUnitAttack(item) {
+    const payload = item.payload || {};
+    const targetId = Number(payload.target_unit_id || 0);
+    const targetEl = targetId > 0 ? document.querySelector(`.board-unit[data-unit-id="${targetId}"]`) : null;
+
+    const actorSide = resolveActorSide(item);
+    if (!actorSide) return;
+
+    const sourceBase = document.querySelector(`.player-base[data-owner-side="${actorSide}"]`);
+    if (!sourceBase || !targetEl) return;
+
+    await animateArrowFlight(sourceBase, targetEl);
+}
+
+async function animateLiveAttackBase(item) {
+    const payload = item.payload || {};
+    const targetSide = String(payload.target_side || '');
+    if (!targetSide) return;
+
+    const targetBase = document.querySelector(`.player-base[data-owner-side="${targetSide}"]`);
+    if (!targetBase) return;
+
+    const actorSide = resolveActorSide(item);
+
+    const sourceType = String(payload.source_type || '');
+    if (sourceType === 'base') {
+        if (!actorSide) return;
+        const sourceBase = document.querySelector(`.player-base[data-owner-side="${actorSide}"]`);
+        if (!sourceBase) return;
+        await animateArrowFlight(sourceBase, targetBase);
+        return;
+    }
+
+    const attackerId = Number(payload.attacker_unit_id || 0);
+    const attackerEl = attackerId > 0 ? document.querySelector(`.board-unit[data-unit-id="${attackerId}"]`) : null;
+    if (!attackerEl) return;
+
+    const attackerType = String(payload?.attacker_before?.type || attackerEl.getAttribute('data-unit-type') || '').toLowerCase();
+    if (attackerType === 'archer') {
+        await animateArrowFlight(attackerEl, targetBase);
+    } else {
+        await animateMeleeStrike(attackerEl, targetBase);
+    }
+}
+
+async function animateLiveUnitAttack(item) {
+    const payload = item.payload || {};
+    const attackerId = Number(payload.attacker_unit_id || 0);
+    const targetId = Number(payload.target_unit_id || 0);
+
+    const attackerEl = attackerId > 0
+        ? document.querySelector(`.board-unit[data-unit-id="${attackerId}"]`)
+        : null;
+
+    const targetEl = targetId > 0
+        ? document.querySelector(`.board-unit[data-unit-id="${targetId}"]`)
+        : null;
+
+    if (!attackerEl || !targetEl) {
+        return;
+    }
+
+    const attackerType = String(
+        payload?.attacker_before?.type
+        || attackerEl.getAttribute('data-unit-type')
+        || ''
+    ).toLowerCase();
+
+    if (attackerType === 'archer') {
+        await animateArrowFlight(attackerEl, targetEl);
+    } else {
+        await animateMeleeStrike(attackerEl, targetEl);
+    }
+}
+
+async function applyLiveEventToDom(item) {
+    const eventType = item.eventType;
+    const payload = item.payload || {};
+
+    if (eventType === 'move_unit') {
+        const unitId = Number(payload.unit_id || 0);
+        const toX = Number(payload?.to?.x);
+        const toY = Number(payload?.to?.y);
+        if (unitId > 0 && Number.isFinite(toX) && Number.isFinite(toY)) {
+            const unitEl = document.querySelector(`.board-unit[data-unit-id="${unitId}"]`);
+            const toCell = document.querySelector(`.cell[data-x="${toX}"][data-y="${toY}"]`);
+
+            if (unitEl && toCell) {
+                toCell.appendChild(unitEl);
+                unitEl.setAttribute('data-x', String(toX));
+                unitEl.setAttribute('data-y', String(toY));
+            }
+        }
+        return;
+    }
+
+    if (eventType === 'attack_unit') {
+        await animateLiveUnitAttack(item);
+        applyUnitAttackDamageToDom(payload);
+        return;
+    }
+
+    if (eventType === 'attack_with_base') {
+        await animateLiveBaseToUnitAttack(item);
+        applyUnitAttackDamageToDom(payload);
+        return;
+    }
+
+    if (eventType === 'attack_base') {
+        await animateLiveAttackBase(item);
+        applyBaseAttackDamageToDom(payload);
+        return;
+    }
+
+    if (eventType === 'deploy_card') {
+        const unit = payload.unit && typeof payload.unit === 'object' ? payload.unit : null;
+        const unitId = Number(unit?.id || payload.unit_id || 0);
+        const unitType = String(unit?.type || payload.unit_type || 'unit');
+        const ownerSide = String(unit?.owner_side || resolveActorSide(item) || '');
+        const toX = Number(unit?.position_x ?? payload?.to?.x);
+        const toY = Number(unit?.position_y ?? payload?.to?.y);
+
+        if (unitId > 0 && Number.isFinite(toX) && Number.isFinite(toY)) {
+            const existing = document.querySelector(`.board-unit[data-unit-id="${unitId}"]`);
+            const toCell = document.querySelector(`.cell[data-x="${toX}"][data-y="${toY}"]`);
+
+            if (!existing && toCell) {
+                const sideClass = ownerSide === 'player_1' ? 'player-1' : 'player-2';
+                const hp = Number(unit?.hp ?? 1);
+                const maxHp = Number(unit?.max_hp ?? hp);
+                const attackPower = Number(unit?.attack_power ?? 0);
+                const movementPoints = Number(unit?.movement_points ?? 0);
+                const hasAttacked = Boolean(unit?.has_attacked_this_turn);
+                const hasCounterAttacked = Boolean(unit?.has_counter_attacked_this_turn);
+
+                const ghost = document.createElement('div');
+                ghost.className = `board-unit ${sideClass}`;
+                ghost.setAttribute('data-unit-id', String(unitId));
+                ghost.setAttribute('data-unit-type', unitType);
+                ghost.setAttribute('data-owner-side', ownerSide);
+                ghost.setAttribute('data-movement-points', String(movementPoints));
+                ghost.setAttribute('data-attack-power', String(attackPower));
+                ghost.setAttribute('data-current-hp', String(hp));
+                ghost.setAttribute('data-max-hp', String(maxHp));
+                ghost.setAttribute('data-has-attacked', hasAttacked ? '1' : '0');
+                ghost.setAttribute('data-has-counter-attacked', hasCounterAttacked ? '1' : '0');
+                ghost.setAttribute('data-x', String(toX));
+                ghost.setAttribute('data-y', String(toY));
+
+                ghost.innerHTML = `
+                    <div class="board-unit-title">#${unitId} ${unitType.charAt(0).toUpperCase() + unitType.slice(1)}</div>
+                    <div class="hp-hearts" data-current-hp="${hp}" data-max-hp="${maxHp}">
+                        ${buildUnitHeartsHtml(hp, maxHp)}
+                    </div>
+                    <div>
+                        <span class="sword-wrap ${hasAttacked ? 'faded' : ''}">
+                            <span>⚔️</span>
+                            <span>${attackPower}</span>
+                        </span>
+                        <span> | </span>
+                        <span class="movement-wrap ${movementPoints <= 0 ? 'faded' : ''}">
+                            <span>🐎</span>
+                            <span>${movementPoints}</span>
+                        </span>
+                    </div>
+                `;
+
+                toCell.appendChild(ghost);
+            }
+        }
+        return;
+    }
+}
+
+function applyUnitAttackDamageToDom(payload) {
+    const targetId = Number(payload.target_unit_id || 0);
+    const attackerId = Number(payload.attacker_unit_id || 0);
+
+    // 1) Обновляем цель атаки
+    if (targetId > 0) {
+        const targetEl = document.querySelector(`.board-unit[data-unit-id="${targetId}"]`);
+
+        if (targetEl) {
+            const hpAfter = Number(payload.target_hp_after);
+            const targetStateAfter = String(payload?.target_after?.state || '');
+            const targetDied = Boolean(payload.target_died) || targetStateAfter === 'graveyard';
+
+            targetEl.style.outline = '3px solid #ef4444';
+            setTimeout(() => {
+                targetEl.style.outline = '';
+            }, 350);
+
+            if (targetDied || (Number.isFinite(hpAfter) && hpAfter <= 0)) {
+                targetEl.remove();
+            } else if (Number.isFinite(hpAfter)) {
+                targetEl.setAttribute('data-current-hp', String(hpAfter));
+
+                const heartsEl = targetEl.querySelector('.hp-hearts');
+                if (heartsEl) {
+                    const maxHp = Number(
+                        heartsEl.getAttribute('data-max-hp')
+                        || targetEl.getAttribute('data-max-hp')
+                        || '0'
+                    );
+
+                    heartsEl.setAttribute('data-current-hp', String(hpAfter));
+                    heartsEl.innerHTML = buildUnitHeartsHtml(hpAfter, maxHp);
+                }
+            }
+        }
+    }
+
+    // 2) Обновляем атакующего после контратаки
+    //    (в payload attack_unit уже есть attacker_before/attacker_after)
+    if (attackerId > 0) {
+        const attackerEl = document.querySelector(`.board-unit[data-unit-id="${attackerId}"]`);
+        if (attackerEl) {
+            const attackerHpAfter = Number(payload?.attacker_after?.hp);
+            const attackerStateAfter = String(payload?.attacker_after?.state || '');
+
+            if (attackerStateAfter === 'graveyard' || (Number.isFinite(attackerHpAfter) && attackerHpAfter <= 0)) {
+                attackerEl.remove();
+                return;
+            }
+
+            if (Number.isFinite(attackerHpAfter)) {
+                attackerEl.setAttribute('data-current-hp', String(attackerHpAfter));
+
+                const heartsEl = attackerEl.querySelector('.hp-hearts');
+                if (heartsEl) {
+                    const maxHp = Number(
+                        heartsEl.getAttribute('data-max-hp')
+                        || attackerEl.getAttribute('data-max-hp')
+                        || '0'
+                    );
+
+                    heartsEl.setAttribute('data-current-hp', String(attackerHpAfter));
+                    heartsEl.innerHTML = buildUnitHeartsHtml(attackerHpAfter, maxHp);
+                }
+            }
+        }
+    }
+}
+
+function applyBaseAttackDamageToDom(payload) {
+    const targetSide = String(payload.target_side || '');
+    if (!targetSide) return;
+
+    const baseEl = document.querySelector(`.player-base[data-owner-side="${targetSide}"]`);
+    if (!baseEl) return;
+
+    baseEl.style.outline = '3px solid #ef4444';
+    setTimeout(() => {
+        baseEl.style.outline = '';
+    }, 350);
+
+    const hpAfter = Number(payload.target_base_hp_after);
+    if (!Number.isFinite(hpAfter)) return;
+
+    const hpValueEl = baseEl.querySelector('.hp-value');
+    if (!hpValueEl) return;
+
+    hpValueEl.textContent = '❤️'.repeat(Math.max(0, hpAfter));
+}
+
+function buildUnitHeartsHtml(currentHp, maxHp) {
+    const safeCurrent = Math.max(0, Number(currentHp || 0));
+    const safeMax = Math.max(0, Number(maxHp || 0));
+    let html = '';
+
+    for (let i = 1; i <= safeMax; i++) {
+        html += `<span class="hp-heart ${i <= safeCurrent ? 'alive' : 'lost'}">❤️</span>`;
+    }
+
+    return html;
+}
+
+function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function initBotToggleUI(gameId) {
+    const btn = document.getElementById('bot-toggle-btn');
+    if (!btn || !window.BotRunner) return;
+
+    const refreshText = () => {
+        const enabled = window.BotRunner.isEnabled(gameId);
+        btn.textContent = enabled ? 'Бот: вкл' : 'Бот: выкл';
+    };
+
+    refreshText();
+
+    btn.addEventListener('click', async () => {
+        const enabledNow = window.BotRunner.isEnabled(gameId);
+        window.BotRunner.setEnabled(gameId, !enabledNow);
+        refreshText();
+
+        if (!enabledNow && typeof window.BotRunner.maybeRunBotTurn === 'function') {
+            await window.BotRunner.maybeRunBotTurn(gameId);
+        }
+    });
+}
 
 function getGameIdFromUrl() {
     const pathParts = window.location.pathname.split('/');
@@ -249,6 +686,10 @@ function highlightMoveTargets() {
     cells.forEach(cell => {
         const tx = parseInt(cell.getAttribute('data-x'), 10);
         const ty = parseInt(cell.getAttribute('data-y'), 10);
+
+        if (isBaseCell(tx, ty)) {
+            return;
+        }
 
         const dx = Math.abs(selectedUnit.x - tx);
         const dy = Math.abs(selectedUnit.y - ty);
@@ -696,6 +1137,10 @@ function bindAttackPreviewHandlers() {
 function buildOccupancyMap() {
     const map = new Map();
 
+    // Штабы тоже занимают клетки
+    map.set('0:0', { ownerSide: 'player_1', isBase: true });
+    map.set('4:2', { ownerSide: 'player_2', isBase: true });
+
     document.querySelectorAll('.board-unit').forEach(unitEl => {
         const ux = parseInt(unitEl.getAttribute('data-x'), 10);
         const uy = parseInt(unitEl.getAttribute('data-y'), 10);
@@ -962,23 +1407,35 @@ function endTurn(gameId) {
 }
 
 function updateGameView(gameId) {
-    fetch(`/api/games/${gameId}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.current_player_side) {
-                currentPlayerSide = data.current_player_side;
+    return fetch(`/game/${gameId}`, {
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+    })
+        .then(response => response.text())
+        .then(html => {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+
+            const freshContainer = doc.querySelector('#game-container');
+            const currentContainer = document.querySelector('#game-container');
+
+            if (!freshContainer || !currentContainer) {
+                throw new Error('Game container not found while partial update');
             }
 
-            location.reload();
+            currentContainer.replaceWith(freshContainer);
+
+            selectedUnit = null;
+            selectedBaseSide = null;
+            moveTargets.clear();
+            clearAttackPreview();
+
+            rebindGameInteractions(gameId);
         })
         .catch(error => {
             console.error('Error updating game view:', error);
         });
-}
-
-function applyAllowedAttackCursor(el) {
-    if (!el) return;
-    el.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'36\' height=\'36\' viewBox=\'0 0 36 36\'%3E%3Ctext x=\'2\' y=\'28\' font-size=\'24\'%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3C/svg%3E") 4 28, pointer';
 }
 
 function applyAllowedRangedAttackCursor(el) {
@@ -1004,4 +1461,9 @@ function applyBlockedRangedAttackCursor(el) {
 function resetBlockedAttackCursor(el) {
     if (!el) return;
     el.style.removeProperty('cursor');
+}
+
+function applyAllowedAttackCursor(el) {
+    if (!el) return;
+    el.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'36\' height=\'36\' viewBox=\'0 0 36 36\'%3E%3Ctext x=\'2\' y=\'28\' font-size=\'24\'%3E%E2%9A%94%EF%B8%8F%3C/text%3E%3C/svg%3E") 4 28, pointer';
 }

@@ -345,10 +345,67 @@
             font-weight: bold;
             font-size: 20px;
         }
+
+        .winner-banner {
+            margin: 12px 0;
+            padding: 12px 14px;
+            border-radius: 10px;
+            background: #16a34a;
+            color: #fff;
+            font-weight: 700;
+            font-size: 18px;
+        }
+
+        .replay-banner {
+            margin: 12px 0;
+            padding: 12px 14px;
+            border-radius: 10px;
+            background: #1d4ed8;
+            color: #fff;
+            font-weight: 700;
+            font-size: 16px;
+        }
+
+        .events-log {
+            margin-top: 14px;
+            border-top: 1px solid #e5e7eb;
+            padding-top: 10px;
+        }
+
+        .events-log h4 {
+            margin: 0 0 8px 0;
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .events-list {
+            max-height: 360px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding-right: 4px;
+        }
+
+        .event-item {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 8px;
+            background: #fafafa;
+            font-size: 13px;
+            line-height: 1.35;
+        }
+
+        .event-meta {
+            color: #6b7280;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
     </style>
 </head>
 <body>
 @php
+    $isReplay = (bool) ($isReplay ?? false);
     $activeSide = $currentPlayerSide ?? 'player_1';
     $activePlayer = $activeSide === 'player_1' ? ($player1 ?? null) : ($player2 ?? null);
 
@@ -368,10 +425,28 @@
 
 <div id="game-container"
      data-game-id="{{ $game->id }}"
-     data-current-player-side="{{ $activeSide }}">
+     data-current-player-side="{{ $activeSide }}"
+     data-ws-key="{{ env('REVERB_APP_KEY', 'app-key') }}"
+     data-ws-host="{{ env('REVERB_HOST', request()->getHost()) }}"
+     data-ws-port="{{ env('REVERB_PORT', 8080) }}"
+     data-ws-scheme="{{ env('REVERB_SCHEME', 'http') }}">
     <div class="layout">
         <div class="main-column">
             <h1>Игра</h1>
+
+            @if($isReplay)
+                <div class="replay-banner">
+                    Режим просмотра сыгранного боя ·
+                    <a href="{{ route('battles.index') }}" style="color:#fff;text-decoration:underline;">К списку боёв</a>
+                </div>
+            @endif
+
+            @if(($game->status ?? null) === 'finished' && !empty($winnerName))
+                <div class="winner-banner">
+                    Игра завершена. Победитель: {{ $winnerName }}
+                    ({{ $winnerSide === 'player_1' ? 'Игрок 1' : 'Игрок 2' }})
+                </div>
+            @endif
 
             <div class="game-info">
                 <p>Ход: {{ $game->current_turn }}</p>
@@ -397,8 +472,7 @@
 
                             @if ($unit)
                                 @php
-                                    $swordFaded = (bool)($unit->has_attacked_this_turn ?? false)
-                                        || (bool)($unit->has_counter_attacked_this_turn ?? false);
+                                    $swordFaded = (bool)($unit->has_attacked_this_turn ?? false);
                                     $movementFaded = ((int)($unit->movement_points ?? 0) <= 0);
                                 @endphp
                                 <div
@@ -415,22 +489,22 @@
                                     data-x="{{ $x }}"
                                     data-y="{{ $y }}"
                                 >
-                                    <div class="board-unit-title">{{ ucfirst($unit->type) }}</div>
+                                    <div class="board-unit-title">#{{ $unit->id }} {{ ucfirst($unit->type) }}</div>
                                     <div class="hp-hearts" data-current-hp="{{ $unit->hp }}" data-max-hp="{{ $unit->max_hp }}">
                                         @for ($i = 1; $i <= (int)$unit->max_hp; $i++)
                                             <span class="hp-heart {{ $i <= (int)$unit->hp ? 'alive' : 'lost' }}">❤️</span>
                                         @endfor
                                     </div>
                                     <div>
-                                        <span class="sword-wrap {{ $swordFaded ? 'faded' : '' }}">
-                                            <span>⚔️</span>
-                                            <span>{{ $unit->attack_power }}</span>
-                                        </span>
+                                            <span class="sword-wrap {{ $swordFaded ? 'faded' : '' }}">
+                                                <span>⚔️</span>
+                                                <span>{{ $unit->attack_power }}</span>
+                                            </span>
                                         <span> | </span>
                                         <span class="movement-wrap {{ $movementFaded ? 'faded' : '' }}">
-                                            <span>🐎</span>
-                                            <span>{{ $unit->movement_points }}</span>
-                                        </span>
+                                                <span>🐎</span>
+                                                <span>{{ $unit->movement_points }}</span>
+                                            </span>
                                     </div>
                                 </div>
                             @elseif ($x === 0 && $y === 0)
@@ -445,13 +519,13 @@
                                      data-base-attack-power="{{ $player1->base_attack ?? 1 }}"
                                      data-base-has-attacked="{{ $base1SwordFaded ? '1' : '0' }}">
                                     <div class="base-content base-content--top">
-                                        <span class="sword-wrap {{ $base1SwordFaded ? 'faded' : '' }}">
-                                            <span class="sword">⚔️</span>
-                                            <span class="attack-value">{{ $player1->base_attack ?? 1 }}</span>
-                                        </span>
+                                            <span class="sword-wrap {{ $base1SwordFaded ? 'faded' : '' }}">
+                                                <span class="sword">⚔️</span>
+                                                <span class="attack-value">{{ $player1->base_attack ?? 1 }}</span>
+                                            </span>
                                         <span class="supplies-icons" title="Припасы: {{ $base1Supplies }}">
-                                            {{ str_repeat('🌾', $base1Supplies) }}
-                                        </span>
+                                                {{ str_repeat('🌾', $base1Supplies) }}
+                                            </span>
                                     </div>
                                     <div class="base-content">
                                         <div class="heart">❤️</div>
@@ -470,13 +544,13 @@
                                      data-base-attack-power="{{ $player2->base_attack ?? 1 }}"
                                      data-base-has-attacked="{{ $base2SwordFaded ? '1' : '0' }}">
                                     <div class="base-content base-content--top">
-                                        <span class="sword-wrap {{ $base2SwordFaded ? 'faded' : '' }}">
-                                            <span class="sword">⚔️</span>
-                                            <span class="attack-value">{{ $player2->base_attack ?? 1 }}</span>
-                                        </span>
+                                            <span class="sword-wrap {{ $base2SwordFaded ? 'faded' : '' }}">
+                                                <span class="sword">⚔️</span>
+                                                <span class="attack-value">{{ $player2->base_attack ?? 1 }}</span>
+                                            </span>
                                         <span class="supplies-icons" title="Припасы: {{ $base2Supplies }}">
-                                            {{ str_repeat('🌾', $base2Supplies) }}
-                                        </span>
+                                                {{ str_repeat('🌾', $base2Supplies) }}
+                                            </span>
                                     </div>
                                     <div class="base-content">
                                         <div class="heart">❤️</div>
@@ -495,7 +569,7 @@
                     <div class="player-hand">
                         @if(count($player1Hand))
                             @foreach($player1Hand as $card)
-                                <div class="card {{ $activeSide !== 'player_1' ? 'disabled' : '' }}"
+                                <div class="card {{ $isReplay || $activeSide !== 'player_1' ? 'disabled' : '' }}"
                                      data-card-type="{{ $card['type'] }}"
                                      data-owner-side="player_1">
                                     {{ ucfirst($card['type']) }} ({{ match($card['type']) { 'archer' => 3, 'berserker' => 4, 'infantry' => 2, 'scout' => 1, default => 0 } }})
@@ -526,7 +600,7 @@
                     <div class="player-hand">
                         @if(count($player2Hand))
                             @foreach($player2Hand as $card)
-                                <div class="card {{ $activeSide !== 'player_2' ? 'disabled' : '' }}"
+                                <div class="card {{ $isReplay || $activeSide !== 'player_2' ? 'disabled' : '' }}"
                                      data-card-type="{{ $card['type'] }}"
                                      data-owner-side="player_2">
                                     {{ ucfirst($card['type']) }} ({{ match($card['type']) { 'archer' => 3, 'berserker' => 4, 'infantry' => 2, 'scout' => 1, default => 0 } }})
@@ -553,9 +627,15 @@
                 </div>
             </div>
 
-            <div style="display:flex; gap: 10px; margin: 8px 0 14px;">
-                <button type="button" onclick="endTurn({{ $game->id }})">Закончить ход</button>
-            </div>
+            @if(!$isReplay)
+                <div style="display:flex; gap: 10px; margin: 8px 0 14px;">
+                    <button type="button" id="end-turn-btn" onclick="endTurn({{ $game->id }})">Закончить ход</button>
+                    <button type="button" id="bot-toggle-btn" data-game-id="{{ $game->id }}">Бот: выкл</button>
+                </div>
+                <p id="bot-toggle-hint" style="margin: 0 0 14px; color: #4b5563; font-size: 14px;">
+                    Автоход за игрока 2
+                </p>
+            @endif
         </div>
 
         <aside class="right-panel">
@@ -572,10 +652,55 @@
                 <span>Карт в отбое</span>
                 <span class="stat-value">{{ $activeDiscardCount }}</span>
             </div>
+
+            <div class="events-log">
+                <h4>Лог действий</h4>
+                <div class="events-list">
+                    @forelse(($recentEvents ?? collect()) as $event)
+                        @php
+                            $actorLabel = $event->actor_side === 'player_1'
+                                ? ($game->player_1_name ?? 'Игрок 1')
+                                : ($game->player_2_name ?? 'Игрок 2');
+
+                            $payload = is_array($event->payload) ? $event->payload : [];
+                            $description = match ($event->event_type) {
+                                'deploy_card' => 'выставил ' . ($payload['unit_type'] ?? 'карту')
+                                    . ' на (' . data_get($payload, 'to.x', '?') . ',' . data_get($payload, 'to.y', '?') . ')',
+                                'move_unit' => 'переместил юнита #' . ($payload['unit_id'] ?? '?')
+                                    . ' с (' . data_get($payload, 'from.x', '?') . ',' . data_get($payload, 'from.y', '?') . ')'
+                                    . ' на (' . data_get($payload, 'to.x', '?') . ',' . data_get($payload, 'to.y', '?') . ')',
+                                'attack_unit' => 'атаковал: юнит #' . ($payload['attacker_unit_id'] ?? '?')
+                                    . ' → юнит #' . ($payload['target_unit_id'] ?? '?'),
+                                'attack_base' => ($payload['source_type'] ?? 'unit') === 'base'
+                                    ? 'штаб атаковал штаб противника'
+                                    : 'юнит #' . ($payload['attacker_unit_id'] ?? '?') . ' атаковал штаб',
+                                'attack_with_base' => 'штаб атаковал юнита #' . ($payload['target_unit_id'] ?? '?'),
+                                'end_turn' => 'завершил ход',
+                                'game_finished' => 'завершение игры. Победитель: '
+                                    . ((data_get($payload, 'winner_side') === 'player_1') ? ($game->player_1_name ?? 'Игрок 1') : ($game->player_2_name ?? 'Игрок 2')),
+                                default => 'совершил действие: ' . $event->event_type,
+                            };
+                        @endphp
+
+                        <div class="event-item">
+                            <div class="event-meta">
+                                #{{ $event->sequence }} · Ход {{ $event->turn_number }} · Раунд {{ $event->round_number }}
+                            </div>
+                            <div><strong>{{ $actorLabel }}</strong> {{ $description }}</div>
+                        </div>
+                    @empty
+                        <div class="event-item">Пока нет действий</div>
+                    @endforelse
+                </div>
+            </div>
         </aside>
     </div>
 </div>
 
-<script src="{{ asset('js/game.js') }}"></script>
+@if(!$isReplay)
+    <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
+    <script src="{{ asset('js/game-bot.js') }}"></script>
+    <script src="{{ asset('js/game.js') }}"></script>
+@endif
 </body>
 </html>
