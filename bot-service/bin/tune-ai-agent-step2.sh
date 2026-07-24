@@ -16,7 +16,7 @@ AI_TUNE_MODE=refine \
 AI_TUNE_JITTER=0.15 \
 AI_TUNE_TRIALS=20 \
 AI_TUNE_BATTLES=60 \
-AI_TUNE_OPPONENT=scripted \
-AI_TUNE_PARALLEL=2 \
+AI_TUNE_OPPONENT=ai_agent_v3_release \
+AI_TUNE_PARALLEL=8 \
 AI_TUNE_WEIGHTS_FILE="$BEST_FILE" \
 php bot-service/bin/tune-ai-agent-v3.php

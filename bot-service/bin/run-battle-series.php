@@ -8,6 +8,7 @@ require_once __DIR__ . '/../src/StrategyFactory.php';
 require_once __DIR__ . '/../Contracts/BotStrategyInterface.php';
 require_once __DIR__ . '/../Strategies/AIAgentV2BotStrategy.php';
 require_once __DIR__ . '/../Strategies/AIAgentV3BotStrategy.php';
+require_once __DIR__ . '/../Strategies/AIAgentV3ReleaseBotStrategy.php';
 require_once __DIR__ . '/../Strategies/CodexV1BotStrategy.php';
 require_once __DIR__ . '/../Strategies/CodexV2BotStrategy.php';
 require_once __DIR__ . '/../Strategies/CodexV3BotStrategy.php';

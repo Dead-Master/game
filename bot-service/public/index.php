@@ -7,6 +7,7 @@ require_once __DIR__ . '/../src/BotRunner.php';
 require_once __DIR__ . '/../src/StrategyFactory.php';
 require_once __DIR__ . '/../Contracts/BotStrategyInterface.php';
 require_once __DIR__ . '/../Strategies/AIAgentV3BotStrategy.php';
+require_once __DIR__ . '/../Strategies/AIAgentV3ReleaseBotStrategy.php';
 require_once __DIR__ . '/../Strategies/ScriptedBotStrategy.php';
 
 

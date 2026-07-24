@@ -253,17 +253,19 @@ function weightRanges(): array
     return [
         'lookahead_alpha' => [0.20, 0.85],
         'future_eval_scale' => [0.70, 1.40],
-        'scale_attack_unit' => [0.75, 1.40],
+        'scale_attack_unit' => [0.75, 2.00],
         'scale_attack_base_with_unit' => [0.75, 1.60],
         'scale_attack_with_base' => [0.70, 1.40],
         'scale_attack_base_with_base' => [0.70, 1.40],
-        'scale_deploy' => [0.60, 1.50],
+        'scale_deploy' => [0.40, 1.50],
         'scale_move' => [0.60, 1.50],
         'eval_base_hp_weight' => [2.5, 9.0],
         'eval_unit_hp_weight' => [0.4, 3.0],
         'eval_unit_attack_weight' => [0.5, 3.5],
         'eval_tempo_weight' => [0.1, 2.5],
         'min_action_score' => [0.5, 25.0],
+        'deploy_distance_weight' => [0.0, 5.0],
+        'deploy_archer_forward_scale' => [-1.0, 1.5],
     ];
 }
 

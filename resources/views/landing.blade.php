@@ -17,7 +17,8 @@
 
         <label for="bot_strategy">Стратегия бота:</label>
         <select id="bot_strategy" name="bot_strategy">
-            <option value="ai_agent_v3" selected>ai_agent_v3</option>
+            <option value="ai_agent_v3_release">ai_agent_v3_release</option>
+            <option value="ai_agent_v3">ai_agent_v3</option>
             <option value="focus_base">focus_base</option>
             <option value="scripted">scripted</option>
             <option value="codex_v2">codex_v2</option>

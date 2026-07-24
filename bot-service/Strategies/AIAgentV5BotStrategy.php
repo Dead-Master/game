@@ -7,7 +7,7 @@ namespace BotService\Strategies;
 use BotService\Contracts\BotStrategyInterface;
 use BotService\GameApiClient;
 
-class AIAgentV3BotStrategy implements BotStrategyInterface
+class AIAgentV5BotStrategy implements BotStrategyInterface
 {
     private const array CARD_COSTS = [
         'archer' => 3,
@@ -25,7 +25,7 @@ class AIAgentV3BotStrategy implements BotStrategyInterface
 
     public function name(): string
     {
-        return 'ai_agent_v3';
+        return 'ai_agent_v5';
     }
 
     /**
@@ -624,7 +624,7 @@ class AIAgentV3BotStrategy implements BotStrategyInterface
      * @return array<string, float|int|string>
      */
 
-    private function weights(): array
+    protected function weights(): array
     {
         if ($this->weightsCache !== null) {
             return $this->weightsCache;
@@ -972,7 +972,14 @@ class AIAgentV3BotStrategy implements BotStrategyInterface
         $enemyBase = $side === 'player_1' ? ['x' => 4, 'y' => 2] : ['x' => 0, 'y' => 0];
         $dist = abs($x - $enemyBase['x']) + abs($y - $enemyBase['y']);
 
-        return $base + (12 - min(12, $dist)) * 2.0;
+        $forward = (12 - min(12, $dist)) * $this->num('deploy_distance_weight', 2.0);
+
+        // Лучник бьёт с любой клетки: продвижение вперёд для него — риск, а не выгода.
+        if ($cardType === 'archer') {
+            $forward *= $this->num('deploy_archer_forward_scale', 1.0);
+        }
+
+        return $base + $forward;
     }
 
     private function scoreMove(array $unit, int $toX, int $toY, string $targetSide): float

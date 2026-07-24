@@ -18,7 +18,7 @@ class GameController extends Controller
         $validated = $request->validate([
             'player_1_name' => ['required', 'string', 'max:50'],
             'player_2_name' => ['required', 'string', 'max:50', 'different:player_1_name'],
-            'bot_strategy' => ['nullable', 'in:codex_v1,codex_v2,focus_base,scripted,ai_agent_v3'],
+            'bot_strategy' => ['nullable', 'in:codex_v1,codex_v2,focus_base,scripted,ai_agent_v3,ai_agent_v3_release'],
             'run_mode' => ['nullable', 'in:web,cli'],
         ]);
 
