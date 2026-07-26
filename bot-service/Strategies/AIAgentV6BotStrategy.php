@@ -7,28 +7,8 @@ namespace BotService\Strategies;
 use BotService\Contracts\BotStrategyInterface;
 use BotService\GameApiClient;
 
-class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
+class AIAgentV6BotStrategy implements BotStrategyInterface
 {
-    /**
-     * @var array<string, float|string>
-     */
-    private const array WEIGHTS = [
-        "lookahead_alpha"=> 0.7670755824255547,
-        "future_eval_scale"=> 0.8328830879290685,
-        "scale_attack_unit"=> 1.4,
-        "scale_attack_base_with_unit"=> 0.9481788411399561,
-        "scale_attack_with_base"=> 1.2062810829693342,
-        "scale_attack_base_with_base"=> 1.2412868166892188,
-        "scale_deploy"=> 0.667987215661351,
-        "scale_move"=> 0.7024484280190576,
-        "eval_base_hp_weight"=> 4.258983200980335,
-        "eval_unit_hp_weight"=> 2.6061556581705045,
-        "eval_unit_attack_weight"=> 2.8951737365968166,
-        "eval_tempo_weight"=> 0.7199651061057121,
-        "min_action_score"=> 19.00868002392205,
-        "name" => 'ai_agent_v3_releaseX'
-    ];
-
     private const array CARD_COSTS = [
         'archer' => 3,
         'berserker' => 4,
@@ -40,21 +20,19 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
     private const float LOOKAHEAD_ALPHA = 0.45;
     private const float MIN_ACTION_SCORE = 1.0;
 
+    /** @var array<string, float|int|string>|null */
+    private ?array $weightsCache = null;
+
     public function name(): string
     {
-        return $this->weights()['name'];
+        return 'ai_agent_v6';
     }
 
-    /**
-     * Пишет диагностическое сообщение в stderr в любом SAPI
-     * (константа STDERR существует только в CLI).
-     */
     private function logDiag(string $message): void
     {
         $stream = defined('STDERR') ? STDERR : fopen('php://stderr', 'wb');
         if (is_resource($stream)) {
             fwrite($stream, $message);
-
             if (!defined('STDERR')) {
                 fclose($stream);
             }
@@ -75,7 +53,6 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
             return ['status' => 'not_bot_turn', 'actions' => $actions, 'strategy' => $this->name()];
         }
 
-        /** @var array<string, true> $failedActions */
         $failedActions = [];
 
         for ($step = 0; $step < self::MAX_ACTIONS_PER_TURN; $step++) {
@@ -118,7 +95,6 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
             ];
 
             if (!$success) {
-                // Не прерываем ход: запоминаем неудачное действие и пробуем другие кандидаты.
                 $failedActions[$this->actionKey($best)] = true;
             }
         }
@@ -165,7 +141,6 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
         $alpha = $this->num('lookahead_alpha', self::LOOKAHEAD_ALPHA);
         $futureScale = $this->num('future_eval_scale', 1.0);
 
-        // Baseline позволяет оценивать именно ИЗМЕНЕНИЕ позиции, а не её абсолютное значение.
         $baseline = $this->evaluateState($state, $side);
 
         $best = $candidates[0];
@@ -194,6 +169,7 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
         $myUnits = $this->getOwnUnits($state, $side);
         $enemyUnits = $this->getEnemyUnits($state, $side);
 
+        // Attack candidates
         foreach ($myUnits as $u) {
             if ((bool) ($u['has_attacked_this_turn'] ?? false)) {
                 continue;
@@ -219,15 +195,15 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
                     && !$kill
                     && $this->canAnyMeleeFinishAfterChip($myUnits, $u, $e, $attackerPower)
                 ) {
-                    $chipFinishBonus = 90;
+                    $chipFinishBonus = $this->num('chip_finish_bonus', 90);
                 }
 
                 $score = 140
                     + min($attackerPower, $enemyHp) * 18
-                    + ($kill ? 170 : 0)
-                    - ($overflow * 8)
-                    - ($counterDamage * 26)
-                    - ($diesFromCounter ? 220 : 0)
+                    + ($kill ? $this->num('kill_bonus', 170) : 0)
+                    - ($overflow * $this->num('overflow_penalty_per_point', 8))
+                    - ($counterDamage * $this->num('counter_damage_penalty_per_point', 26))
+                    - ($diesFromCounter ? $this->num('dies_from_counter_penalty', 220) : 0)
                     + $chipFinishBonus;
 
                 if ((($u['type'] ?? '') !== 'archer') && !$kill && $counterDamage > 0) {
@@ -248,16 +224,17 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
                 ];
             }
 
+            // Attack base with unit
             if ($this->canAttackBase($u, $targetSide)) {
                 $power = $this->unitAttackPower($u);
-                $enemyBaseHp = (int) ($this->getBaseHpBySide($state, $targetSide) ?? 99);
+                $enemyBaseHp = $this->getBaseHpBySide($state, $targetSide) ?? 99;
                 $lethal = $power >= $enemyBaseHp;
 
                 $d = $this->distanceToEnemyBase($u, $targetSide);
                 $score = 180
                     + ($power * 20)
                     + max(0, 8 - $d) * 5
-                    + ($lethal ? 10000 : 0);
+                    + ($lethal ? $this->num('base_attack_lethal_bonus', 10000) : 0);
                 $score *= $this->num('scale_attack_base_with_unit', 1.0);
 
                 $candidates[] = [
@@ -269,6 +246,7 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
             }
         }
 
+        // Base attack candidates
         if ($this->canBaseAttack($state, $side)) {
             $basePower = $this->getBaseAttackPowerBySide($state, $side);
 
@@ -286,10 +264,10 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
                 ];
             }
 
-            $enemyBaseHp = (int) ($this->getBaseHpBySide($state, $targetSide) ?? 99);
+            $enemyBaseHp = $this->getBaseHpBySide($state, $targetSide) ?? 99;
             $lethal = $basePower >= $enemyBaseHp;
 
-            $score = (105 + ($lethal ? 10000 : 0)) * $this->num('scale_attack_base_with_base', 1.0);
+            $score = (105 + ($lethal ? $this->num('base_attack_lethal_bonus', 10000) : 0)) * $this->num('scale_attack_base_with_base', 1.0);
             $candidates[] = [
                 'type' => 'attack_base_with_base',
                 'target_side' => $targetSide,
@@ -297,6 +275,7 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
             ];
         }
 
+        // Deploy candidates
         $player = $this->getPlayerBySide($state, $side);
         if ($player !== null) {
             $hand = is_array($player['hand'] ?? null) ? $player['hand'] : [];
@@ -306,7 +285,7 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
             foreach ($hand as $card) {
                 $cardType = (string) ($card['type'] ?? '');
                 if (isset($seenCardTypes[$cardType])) {
-                    continue; // одинаковые карты дают одинаковые кандидаты
+                    continue;
                 }
 
                 $seenCardTypes[$cardType] = true;
@@ -337,6 +316,7 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
             }
         }
 
+        // Move candidates
         foreach ($myUnits as $u) {
             foreach ($this->possibleMovesForUnit($state, $u) as $move) {
                 $score = $this->scoreMove($u, (int) $move['x'], (int) $move['y'], $targetSide) * $this->num('scale_move', 1.0);
@@ -352,81 +332,6 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
         }
 
         return $candidates;
-    }
-
-    private function preferredDeployCells(string $side): array
-    {
-        if ($side === 'player_1') {
-            return [
-                ['x' => 1, 'y' => 1],
-                ['x' => 1, 'y' => 0],
-                ['x' => 0, 'y' => 1],
-            ];
-        }
-
-        return [
-            ['x' => 3, 'y' => 1],
-            ['x' => 3, 'y' => 2],
-            ['x' => 4, 'y' => 1],
-        ];
-    }
-
-    /**
-     * @return array<int, array{x:int,y:int}>
-     */
-    private function adjacentCells(int $x, int $y): array
-    {
-        $result = [];
-        $deltas = [
-            [0, -1], [0, 1], [-1, 0], [1, 0],
-            [-1, -1], [-1, 1], [1, -1], [1, 1],
-        ];
-
-        foreach ($deltas as [$dx, $dy]) {
-            $nx = $x + $dx;
-            $ny = $y + $dy;
-
-            if ($nx >= 0 && $nx <= 4 && $ny >= 0 && $ny <= 2) {
-                $result[] = ['x' => $nx, 'y' => $ny];
-            }
-        }
-
-        return $result;
-    }
-
-    /**
-     * Сервер разрешает деплой только на клетки, смежные с базой.
-     *
-     * @return array<int, array{x:int,y:int}>
-     */
-    private function deployCandidateCells(string $side): array
-    {
-        $base = $side === 'player_1' ? ['x' => 0, 'y' => 0] : ['x' => 4, 'y' => 2];
-
-        $result = [];
-        $seen = [];
-
-        foreach ($this->preferredDeployCells($side) as $cell) {
-            $key = ((int) $cell['x']) . ':' . ((int) $cell['y']);
-            if (isset($seen[$key])) {
-                continue;
-            }
-
-            $seen[$key] = true;
-            $result[] = ['x' => (int) $cell['x'], 'y' => (int) $cell['y']];
-        }
-
-        foreach ($this->adjacentCells((int) $base['x'], (int) $base['y']) as $cell) {
-            $key = ((int) $cell['x']) . ':' . ((int) $cell['y']);
-            if (isset($seen[$key])) {
-                continue;
-            }
-
-            $seen[$key] = true;
-            $result[] = ['x' => (int) $cell['x'], 'y' => (int) $cell['y']];
-        }
-
-        return $result;
     }
 
     private function executeAction(GameApiClient $api, int $gameId, string $side, array $action): array
@@ -445,8 +350,8 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
     private function applyVirtualAction(array $state, string $side, string $targetSide, array $action): array
     {
         $next = $state;
-
         $type = (string) ($action['type'] ?? '');
+
         if ($type === 'attack_unit') {
             $attackerId = (int) ($action['attacker_id'] ?? 0);
             $targetId = (int) ($action['target_id'] ?? 0);
@@ -469,11 +374,9 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
 
             if ($targetHp <= 0) {
                 $next['units'][$targetIdx]['state'] = 'graveyard';
-
                 return $next;
             }
 
-            // Сервер наносит контратаку, если защитник выжил, а атакующий — не лучник.
             if ((($attacker['type'] ?? '') !== 'archer') && $this->canUnitCounterAttack($defender)) {
                 $attackerHp = (int) ($attacker['hp'] ?? 0) - $this->unitAttackPower($defender);
                 $next['units'][$attackerIdx]['hp'] = $attackerHp;
@@ -495,7 +398,6 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
                 $this->applyBaseDamage($next, $targetSide, $power);
                 $next['units'][$attackerIdx]['has_attacked_this_turn'] = true;
             }
-
             return $next;
         }
 
@@ -541,7 +443,6 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
                     (int) ($next['units'][$idx]['movement_points'] ?? 0) - $cost
                 );
             }
-
             return $next;
         }
 
@@ -559,7 +460,6 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
                 'position_y' => (int) ($action['y'] ?? 0),
                 'hp' => $stats['hp'],
                 'attack_power' => $stats['attack_power'],
-                // Сервер уменьшает очки движения на 1 при деплое.
                 'movement_points' => max(0, $stats['movement_points'] - 1),
                 'has_attacked_this_turn' => false,
                 'has_counter_attacked_this_turn' => false,
@@ -634,15 +534,85 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
         return is_numeric($value) ? (float) $value : $default;
     }
 
-    /**
-     * @return array<string, float|int|string>
-     */
-
     private function weights(): array
     {
-        return self::WEIGHTS;
-    }
+        if ($this->weightsCache !== null) {
+            return $this->weightsCache;
+        }
 
+        $weights = [];
+        $source = 'defaults (no env weights found)';
+
+        foreach (['AI_AGENT_V6_WEIGHTS_JSON', 'AI_AGENT_V3_WEIGHTS_JSON'] as $envKey) {
+            $inline = getenv($envKey);
+            if (is_string($inline) && trim($inline) !== '') {
+                $decoded = json_decode($inline, true);
+                if (is_array($decoded)) {
+                    $weights = $decoded;
+                    $source = 'env ' . $envKey;
+                    break;
+                }
+
+                $this->logDiag("[{$this->name()}] WARNING: {$envKey} is set but is not valid JSON, ignoring.\n");
+            }
+        }
+
+        if ($weights === []) {
+            foreach (['AI_AGENT_V6_WEIGHTS_FILE', 'AI_AGENT_V3_WEIGHTS_FILE'] as $envKey) {
+                $file = getenv($envKey);
+                if (!is_string($file) || trim($file) === '') {
+                    continue;
+                }
+
+                if (!is_file($file)) {
+                    $this->logDiag("[{$this->name()}] WARNING: {$envKey} points to missing file: {$file}\n");
+                    continue;
+                }
+
+                $raw = file_get_contents($file);
+                $decoded = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
+
+                if (is_array($decoded)) {
+                    $weights = $decoded;
+                    $source = 'file ' . $file;
+                    break;
+                }
+
+                $this->logDiag("[{$this->name()}] WARNING: {$envKey} file contains invalid JSON: {$file}\n");
+            }
+        }
+
+        if ($weights === []) {
+            $defaultFile = __DIR__ . '/../config/ai-agent-v6.default-weights.json';
+            if (is_file($defaultFile)) {
+                $raw = file_get_contents($defaultFile);
+                $decoded = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
+
+                if (is_array($decoded)) {
+                    $weights = $decoded;
+                    $source = 'default config file ' . $defaultFile;
+                }
+            }
+        }
+
+        if (isset($weights['weights']) && is_array($weights['weights'])) {
+            $weights = $weights['weights'];
+            $source .= ' (unwrapped "weights" key)';
+        }
+
+        if (getenv('AI_AGENT_DEBUG_WEIGHTS') === '1') {
+            $this->logDiag(sprintf(
+                "[%s] weights source: %s; keys: %s\n",
+                $this->name(),
+                $source,
+                $weights === [] ? '(none)' : implode(', ', array_keys($weights))
+            ));
+        }
+
+        $this->weightsCache = $weights;
+
+        return $this->weightsCache;
+    }
 
     private function getPlayerBySide(array $state, string $side): ?array
     {
@@ -878,7 +848,6 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
         $dx = abs($x - $targetX);
         $dy = abs($y - $targetY);
 
-        // Сервер списывает max(dx, dy) очков движения — их должно хватать.
         if (max($dx, $dy) > $movement) {
             return false;
         }
@@ -896,18 +865,19 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
 
     private function scoreDeploy(string $cardType, int $x, int $y, string $side): float
     {
-        $base = match ($cardType) {
-            'archer' => 62.0,
-            'infantry' => 56.0,
-            'scout' => 43.0,
-            'berserker' => 40.0,
-            default => 30.0,
-        };
+        $baseMap = [
+            'archer' => $this->num('deploy_base_archer', 62.0),
+            'infantry' => $this->num('deploy_base_infantry', 56.0),
+            'scout' => $this->num('deploy_base_scout', 43.0),
+            'berserker' => $this->num('deploy_base_berserker', 40.0),
+        ];
+        $base = $baseMap[$cardType] ?? 30.0;
 
         $enemyBase = $side === 'player_1' ? ['x' => 4, 'y' => 2] : ['x' => 0, 'y' => 0];
         $dist = abs($x - $enemyBase['x']) + abs($y - $enemyBase['y']);
+        $distBonus = (12 - min(12, $dist)) * $this->num('deploy_distance_value_coeff', 2.0);
 
-        return $base + (12 - min(12, $dist)) * 2.0;
+        return $base + $distBonus;
     }
 
     private function scoreMove(array $unit, int $toX, int $toY, string $targetSide): float
@@ -918,21 +888,19 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
 
         $progress = $currentDist - $futureDist;
 
-        // Ходы без продвижения к вражеской базе не нужны — они сжигают лимит действий.
         if ($progress <= 0) {
-            return -100.0;
+            return $this->num('move_negative_penalty', -100.0);
         }
 
         $typeBonus = match ((string) ($unit['type'] ?? '')) {
             'infantry' => 10.0,
             'scout' => 12.0,
             'berserker' => 6.0,
-            // Лучник бьёт с любой клетки — двигать его почти бессмысленно.
             'archer' => -8.0,
             default => 0.0,
         };
 
-        return ($progress * 13.0) + $typeBonus;
+        return ($progress * $this->num('move_progress_coeff', 13.0)) + $typeBonus;
     }
 
     private function distanceToEnemyBase(array $unit, string $targetSide): int
@@ -959,7 +927,6 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
     {
         foreach (($state['players'] ?? []) as $player) {
             if (($player['side'] ?? '') === $side) {
-                // API отдаёт поле base_attack; base_attack_power оставлен как fallback.
                 $power = $player['base_attack'] ?? $player['base_attack_power'] ?? 0;
 
                 return (int) $power;
@@ -1031,5 +998,78 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
             'infantry' => ['hp' => 5, 'attack_power' => 2, 'movement_points' => 1],
             default => ['hp' => 3, 'attack_power' => 1, 'movement_points' => 1],
         };
+    }
+
+    private function preferredDeployCells(string $side): array
+    {
+        if ($side === 'player_1') {
+            return [
+                ['x' => 1, 'y' => 1],
+                ['x' => 1, 'y' => 0],
+                ['x' => 0, 'y' => 1],
+            ];
+        }
+
+        return [
+            ['x' => 3, 'y' => 1],
+            ['x' => 3, 'y' => 2],
+            ['x' => 4, 'y' => 1],
+        ];
+    }
+
+    /**
+     * @return array<int, array{x:int,y:int}>
+     */
+    private function adjacentCells(int $x, int $y): array
+    {
+        $result = [];
+        $deltas = [
+            [0, -1], [0, 1], [-1, 0], [1, 0],
+            [-1, -1], [-1, 1], [1, -1], [1, 1],
+        ];
+
+        foreach ($deltas as [$dx, $dy]) {
+            $nx = $x + $dx;
+            $ny = $y + $dy;
+
+            if ($nx >= 0 && $nx <= 4 && $ny >= 0 && $ny <= 2) {
+                $result[] = ['x' => $nx, 'y' => $ny];
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * @return array<int, array{x:int,y:int}>
+     */
+    private function deployCandidateCells(string $side): array
+    {
+        $base = $side === 'player_1' ? ['x' => 0, 'y' => 0] : ['x' => 4, 'y' => 2];
+
+        $result = [];
+        $seen = [];
+
+        foreach ($this->preferredDeployCells($side) as $cell) {
+            $key = ($cell['x']) . ':' . ($cell['y']);
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $result[] = ['x' => (int) $cell['x'], 'y' => (int) $cell['y']];
+        }
+
+        foreach ($this->adjacentCells((int) $base['x'], (int) $base['y']) as $cell) {
+            $key = ((int) $cell['x']) . ':' . ((int) $cell['y']);
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $result[] = ['x' => (int) $cell['x'], 'y' => (int) $cell['y']];
+        }
+
+        return $result;
     }
 }

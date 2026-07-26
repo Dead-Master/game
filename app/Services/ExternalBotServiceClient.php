@@ -49,6 +49,16 @@ final class ExternalBotServiceClient
                 'status' => $response->status(),
                 'body' => $response->body(),
             ]);
+
+            return;
+        }
+
+        $botName = trim((string) $response->json('strategy', ''));
+
+        if ($game && $botName !== '') {
+            $game->update([
+                'player_2_name' => mb_substr($botName, 0, 50),
+            ]);
         }
     }
 }

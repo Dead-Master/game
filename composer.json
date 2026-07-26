@@ -24,6 +24,10 @@
     "autoload": {
         "psr-4": {
             "App\\": "app/",
+            "BotService\\": [
+                "bot-service/src/",
+                "bot-service/"
+            ],
             "Database\\Factories\\": "database/factories/",
             "Database\\Seeders\\": "database/seeders/"
         }
