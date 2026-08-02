@@ -17,7 +17,7 @@ declare(strict_types=1);
  * AI_TUNE_JITTER=0.15               # разброс мутаций в режиме refine (доля от значения)
  * AI_TUNE_TRIALS=30
  * AI_TUNE_BATTLES=60                # боёв НА КАЖДУЮ сторону (итого x2 на trial)
- * AI_TUNE_OPPONENT=codex_v1
+ * AI_TUNE_OPPONENT=ai_agent_v3
  * AI_TUNE_PARALLEL=2                # параллельных trial-ов (процессов будет x2)
  * AI_TUNE_WEIGHTS_FILE=/path/to/base-weights.json   # может быть best-файлом тюнера
  * AI_BATTLE_BASE_URL=http://127.0.0.1:8000
@@ -33,7 +33,7 @@ if (!is_dir($resultsDir)) {
 }
 
 $tunedStrategy = (string) (getenv('AI_TUNE_STRATEGY') ?: 'ai_agent_v3');
-if (!in_array($tunedStrategy, ['ai_agent_v2', 'ai_agent_v3'], true)) {
+if (!in_array($tunedStrategy, ['ai_agent_v2', 'ai_agent_v3', 'ai_agent_v6'], true)) {
     throw new RuntimeException("Unsupported AI_TUNE_STRATEGY '{$tunedStrategy}'.");
 }
 
@@ -45,7 +45,7 @@ if (!in_array($mode, ['explore', 'refine'], true)) {
 $jitter = max(0.01, min(1.0, (float) (getenv('AI_TUNE_JITTER') ?: 0.15)));
 $trials = max(1, (int) (getenv('AI_TUNE_TRIALS') ?: 20));
 $battles = max(1, (int) (getenv('AI_TUNE_BATTLES') ?: 60));
-$opponent = (string) (getenv('AI_TUNE_OPPONENT') ?: 'codex_v1');
+$opponent = (string) (getenv('AI_TUNE_OPPONENT') ?: 'ai_agent_v3');
 $parallel = max(1, (int) (getenv('AI_TUNE_PARALLEL') ?: 1));
 
 $weightsEnvKey = $tunedStrategy === 'ai_agent_v3'

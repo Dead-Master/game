@@ -136,31 +136,159 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
         ]);
     }
 
+    /**
+     * Deep lookahead evaluation: simulate our action, enemy best response, and our follow-up.
+     * Returns score of final position after N plies of play.
+     */
+    private function deepEvaluate(array $state, string $side, string $targetSide, array $ourAction, int $depth, float $baseline): float
+    {
+        if ($depth <= 0) {
+            return $this->evaluateState($state, $side) - $baseline;
+        }
+
+        // Apply our action
+        $stateAfterOur = $this->applyVirtualAction($state, $side, $targetSide, $ourAction);
+        $ourScore = $this->evaluateState($stateAfterOur, $side) - $baseline;
+
+        if ($depth === 1) {
+            return $ourScore;
+        }
+
+        // Depth >= 2: Find enemy's best response
+        $enemyCandidates = $this->buildCandidateActions($stateAfterOurAction, $targetSide, $side);
+        
+        if (count($enemyCandidates) === 0) {
+            // Enemy has no moves (shouldn't happen, but handle gracefully)
+            return $ourScore;
+        }
+
+        // Evaluate each enemy candidate with greedy heuristic (faster than recursive deep eval)
+        $bestEnemyScore = -INF;
+        $bestEnemyAction = $enemyCandidates[0];
+
+        foreach ($enemyCandidates as $enemyAction) {
+            $enemyImmediate = (float) ($enemyAction['immediate_score'] ?? 0.0);
+            
+            // For speed: use immediate score as proxy for enemy's best move
+            // (Could do shallow lookahead here, but would be slow)
+            if ($enemyImmediate > $bestEnemyScore) {
+                $bestEnemyScore = $enemyImmediate;
+                $bestEnemyAction = $enemyAction;
+            }
+        }
+
+        // Apply enemy's best response
+        $stateAfterEnemy = $this->applyVirtualAction($stateAfterOurAction, $targetSide, $side, $bestEnemyAction);
+
+        if ($depth === 2) {
+            // Depth 2: Return evaluation after enemy's move
+            $enemyScore = $this->evaluateState($stateAfterEnemy, $side) - $baseline;
+            // Weight: our move (higher), enemy response (lower = worst case for us)
+            return ($ourScore * 0.6) + ($enemyScore * 0.4);
+        }
+
+        // Depth >= 3: Find our follow-up
+        $ourFollowupCandidates = $this->buildCandidateActions($stateAfterEnemy, $side, $targetSide);
+        
+        if (count($ourFollowupCandidates) === 0) {
+            $enemyScore = $this->evaluateState($stateAfterEnemy, $side) - $baseline;
+            return ($ourScore * 0.6) + ($enemyScore * 0.4);
+        }
+
+        // Find our best follow-up move
+        $bestFollowupScore = -INF;
+        $bestFollowupAction = $ourFollowupCandidates[0];
+
+        foreach ($ourFollowupCandidates as $followupAction) {
+            $followupImmediate = (float) ($followupAction['immediate_score'] ?? 0.0);
+            if ($followupImmediate > $bestFollowupScore) {
+                $bestFollowupScore = $followupImmediate;
+                $bestFollowupAction = $followupAction;
+            }
+        }
+
+        // Apply our follow-up
+        $stateAfterFollowup = $this->applyVirtualAction($stateAfterEnemy, $side, $targetSide, $bestFollowupAction);
+        $followupScore = $this->evaluateState($stateAfterFollowup, $side) - $baseline;
+
+        // Return weighted average: our move, enemy response, our follow-up
+        return ($ourScore * 0.5) + ($bestEnemyScore * (-0.1)) + ($followupScore * 0.6);
+    }
+
     private function pickBestByLookahead(array $state, string $side, string $targetSide, array $candidates): array
     {
         $alpha = $this->num('lookahead_alpha', self::LOOKAHEAD_ALPHA);
         $futureScale = $this->num('future_eval_scale', 1.0);
+        $beamSize = (int) $this->num('beam_size', 8);
+        $deepDepth = (int) $this->num('deep_depth', 2);
+        $minImmediateScore = $this->num('min_immediate_score_for_deep', 5.0);
 
         $baseline = $this->evaluateState($state, $side);
 
-        $best = $candidates[0];
-        $bestScore = -INF;
-
+        // Phase 1: Quick filter + immediate scoring (shallow lookahead)
+        $scored = [];
         foreach ($candidates as $candidate) {
             $immediate = (float) ($candidate['immediate_score'] ?? 0.0);
+            
+            // Skip very weak candidates
+            if ($immediate < $minImmediateScore) {
+                continue;
+            }
+
             $nextState = $this->applyVirtualAction($state, $side, $targetSide, $candidate);
             $delta = $this->evaluateState($nextState, $side) - $baseline;
+            $shallowScore = $immediate + ($alpha * $delta * $futureScale);
 
-            $final = $immediate + ($alpha * $delta * $futureScale);
+            $scored[] = [
+                'candidate' => $candidate,
+                'immediate' => $immediate,
+                'shallow_score' => $shallowScore,
+                'delta' => $delta,
+            ];
+        }
 
-            if ($final > $bestScore) {
-                $bestScore = $final;
+        // If all candidates filtered out, pick best immediate
+        if (count($scored) === 0) {
+            $best = null;
+            $bestImmediate = -INF;
+            foreach ($candidates as $candidate) {
+                $immediate = (float) ($candidate['immediate_score'] ?? 0.0);
+                if ($immediate > $bestImmediate) {
+                    $bestImmediate = $immediate;
+                    $best = $candidate;
+                }
+            }
+            return $best ?? $candidates[0];
+        }
+
+        // Sort by shallow score (descending)
+        usort($scored, fn (array $a, array $b) => $b['shallow_score'] <=> $a['shallow_score']);
+
+        // Phase 2: Deep lookahead on top-N (beam pruning)
+        $topBeam = array_slice($scored, 0, $beamSize);
+        
+        $best = null;
+        $bestFinalScore = -INF;
+
+        foreach ($topBeam as $item) {
+            $candidate = $item['candidate'];
+            $immediate = $item['immediate'];
+            $shallowScore = $item['shallow_score'];
+
+            // Deep evaluation (2-3 ply lookahead)
+            $deepScore = $this->deepEvaluate($state, $side, $targetSide, $candidate, $deepDepth, $baseline);
+
+            // Combine shallow + deep: weight immediate + future heavily with deep lookahead
+            $final = ($immediate * 0.3) + ($shallowScore * 0.2) + ($deepScore * 0.5);
+
+            if ($final > $bestFinalScore) {
+                $bestFinalScore = $final;
                 $candidate['_final_score'] = $final;
                 $best = $candidate;
             }
         }
 
-        return $best;
+        return $best ?? $scored[0]['candidate'];
     }
 
     private function buildCandidateActions(array $state, string $side, string $targetSide): array
@@ -495,24 +623,68 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
         $enemyAtk = 0.0;
         $myTempo = 0.0;
         $enemyTempo = 0.0;
+        $myBoardControl = 0.0;
+        $enemyBoardControl = 0.0;
+        $myThreat = 0.0;
+        $enemyThreat = 0.0;
 
         foreach ($myUnits as $u) {
             $myHp += (float) ((int) ($u['hp'] ?? 0));
             $myAtk += (float) $this->unitAttackPower($u);
             $myTempo += (float) (10 - min(10, $this->distanceToEnemyBase($u, $enemySide)));
+            
+            // Board control: count units adjacent to enemy base
+            $x = (int) ($u['x'] ?? -1);
+            $y = (int) ($u['y'] ?? -1);
+            if (($enemySide === 'player_1' && $this->isAdjacentTo($x, $y, 0, 0))
+                || ($enemySide === 'player_2' && $this->isAdjacentTo($x, $y, 4, 2))) {
+                $myBoardControl += 2.0;
+            }
         }
 
         foreach ($enemyUnits as $u) {
             $enemyHp += (float) ((int) ($u['hp'] ?? 0));
             $enemyAtk += (float) $this->unitAttackPower($u);
             $enemyTempo += (float) (10 - min(10, $this->distanceToEnemyBase($u, $side)));
+            
+            // Enemy board control
+            $x = (int) ($u['x'] ?? -1);
+            $y = (int) ($u['y'] ?? -1);
+            if (($side === 'player_1' && $this->isAdjacentTo($x, $y, 0, 0))
+                || ($side === 'player_2' && $this->isAdjacentTo($x, $y, 4, 2))) {
+                $enemyBoardControl += 2.0;
+            }
+            
+            // Threat: potential damage from enemy units to our base
+            $dist = $this->distanceToOurBase($u, $side);
+            if ($dist <= 2) {
+                $enemyThreat += (float) $this->unitAttackPower($u) * (3.0 - $dist);
+            }
         }
+
+        // Calculate threat to our units
+        foreach ($myUnits as $u) {
+            $uDist = $this->distanceToEnemyBase($u, $enemySide);
+            foreach ($enemyUnits as $eu) {
+                $euDist = $this->distanceToUnit($u, $eu);
+                if ($euDist <= 2) {
+                    $myThreat += (float) $this->unitAttackPower($eu) * (2.0 - min(1, $euDist));
+                }
+            }
+        }
+
+        // Supply advantage (resources)
+        $mySupply = (float) ($this->getTotalSupplies($state, $side) ?? 0);
+        $enemySupply = (float) ($this->getTotalSupplies($state, $enemySide) ?? 0);
 
         return
             ($myBase - $enemyBase) * $this->num('eval_base_hp_weight', 5.0)
             + ($myHp - $enemyHp) * $this->num('eval_unit_hp_weight', 1.2)
             + ($myAtk - $enemyAtk) * $this->num('eval_unit_attack_weight', 1.7)
-            + ($myTempo - $enemyTempo) * $this->num('eval_tempo_weight', 0.8);
+            + ($myTempo - $enemyTempo) * $this->num('eval_tempo_weight', 0.8)
+            + ($myBoardControl - $enemyBoardControl) * $this->num('eval_board_control_weight', 2.5)
+            + ($mySupply - $enemySupply) * $this->num('eval_supply_weight', 1.0)
+            - $myThreat * $this->num('eval_threat_weight', 3.5);
     }
 
     private function refreshState(GameApiClient $api, int $gameId): array
@@ -1071,5 +1243,51 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
         }
 
         return $result;
+    }
+
+    /**
+     * Check if a cell is adjacent to target cell (including diagonals).
+     */
+    private function isAdjacentTo(int $x, int $y, int $targetX, int $targetY): bool
+    {
+        $dx = abs($x - $targetX);
+        $dy = abs($y - $targetY);
+        
+        return $dx <= 1 && $dy <= 1 && ($dx + $dy) > 0;
+    }
+
+    /**
+     * Calculate Manhattan distance from unit to our base.
+     */
+    private function distanceToOurBase(array $unit, string $side): int
+    {
+        $baseX = $side === 'player_1' ? 0 : 4;
+        $baseY = $side === 'player_1' ? 0 : 2;
+
+        return abs((int) ($unit['position_x'] ?? 0) - $baseX)
+            + abs((int) ($unit['position_y'] ?? 0) - $baseY);
+    }
+
+    /**
+     * Calculate Manhattan distance between two units.
+     */
+    private function distanceToUnit(array $unit1, array $unit2): int
+    {
+        return abs((int) ($unit1['position_x'] ?? 0) - (int) ($unit2['position_x'] ?? 0))
+            + abs((int) ($unit1['position_y'] ?? 0) - (int) ($unit2['position_y'] ?? 0));
+    }
+
+    /**
+     * Get total remaining supplies (resources) for a player.
+     */
+    private function getTotalSupplies(array $state, string $side): int
+    {
+        foreach (($state['players'] ?? []) as $player) {
+            if (($player['side'] ?? '') === $side) {
+                return (int) ($player['supplies'] ?? $player['resources'] ?? 0);
+            }
+        }
+
+        return 0;
     }
 }

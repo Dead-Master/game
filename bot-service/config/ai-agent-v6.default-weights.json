@@ -52,5 +52,6 @@
     "max_actions_per_turn": 24,
     "debug_logging": false,
     "log_state_hash": false,
-    "dump_candidates_limit": 20
+    "dump_candidates_limit": 20,
+    "_comment_phase2": "Phase 2 additions: beam_size, deep_depth activate beam pruning and 2-3 ply lookahead"
 }

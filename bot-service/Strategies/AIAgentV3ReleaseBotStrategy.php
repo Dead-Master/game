@@ -26,7 +26,7 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
         "eval_unit_attack_weight"=> 2.8951737365968166,
         "eval_tempo_weight"=> 0.7199651061057121,
         "min_action_score"=> 19.00868002392205,
-        "name" => 'ai_agent_v3_releaseX'
+        "name" => 'ai_agent_v3_release'
     ];
 
     private const array CARD_COSTS = [
