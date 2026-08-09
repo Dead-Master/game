@@ -95,8 +95,14 @@ final class ScriptedBotStrategy implements BotStrategyInterface
                 }
             }
 
-            $end = $api->endTurn($gameId, $side);
-            $actions[] = $this->action('end_turn', $end);
+            $state = $this->refreshState($api, $gameId);
+            if (
+                ($state['game']['status'] ?? 'finished') === 'active'
+                && ($state['current_player_side'] ?? '') === $side
+            ) {
+                $end = $api->endTurn($gameId, $side);
+                $actions[] = $this->action('end_turn', $end);
+            }
 
             return ['status' => 'ok', 'actions' => $actions, 'strategy' => $this->name()];
         }
@@ -133,6 +139,10 @@ final class ScriptedBotStrategy implements BotStrategyInterface
             $res = $api->attackBaseWithUnit($gameId, $side, (int) $unitNearEnemy['id'], $targetSide);
             $actions[] = $this->action('attack_base_with_unit', $res, ['attacker_unit_id' => (int) $unitNearEnemy['id']]);
             $state = $this->refreshState($api, $gameId);
+
+            if (($state['game']['status'] ?? 'finished') !== 'active') {
+                return $this->turnResult($gameId, $side, $actions);
+            }
         }
 
         // 4) если на подходе стоит свой юнит -> двигаем к базе врага -> атака штаба
@@ -152,6 +162,10 @@ final class ScriptedBotStrategy implements BotStrategyInterface
                 $res = $api->attackBaseWithUnit($gameId, $side, (int) $unitNearEnemy['id'], $targetSide);
                 $actions[] = $this->action('attack_base_with_unit', $res, ['attacker_unit_id' => (int) $unitNearEnemy['id']]);
                 $state = $this->refreshState($api, $gameId);
+
+                if (($state['game']['status'] ?? 'finished') !== 'active') {
+                    return $this->turnResult($gameId, $side, $actions);
+                }
             }
         }
 
@@ -286,12 +300,24 @@ final class ScriptedBotStrategy implements BotStrategyInterface
             $actions[] = $this->action('attack_base_with_base', $res, [
                 'target_side' => $targetSide,
             ]);
+            $state = $this->refreshState($api, $gameId);
         }
 
         // 10) end turn
-        $end = $api->endTurn($gameId, $side);
-        $actions[] = $this->action('end_turn', $end);
+        if (
+            ($state['game']['status'] ?? 'finished') === 'active'
+            && ($state['current_player_side'] ?? '') === $side
+        ) {
+            $end = $api->endTurn($gameId, $side);
+            $actions[] = $this->action('end_turn', $end);
+        }
 
+        return $this->turnResult($gameId, $side, $actions);
+    }
+
+    /** @return array<string, mixed> */
+    private function turnResult(int $gameId, string $side, array $actions): array
+    {
         return [
             'status' => 'ok',
             'game_id' => $gameId,
@@ -460,9 +486,9 @@ final class ScriptedBotStrategy implements BotStrategyInterface
 
         return match ($type) {
             'infantry' => ($dx + $dy === 1) || ($dx === 1 && $dy === 1),
-            'archer' => max($dx, $dy) <= $movement,
+            'archer' => ($dx + $dy) === 1,
             'berserker' => ($dx + $dy) === 1,
-            'scout' => ($dx === 0 || $dy === 0) && (($dx + $dy) <= $movement),
+            'scout' => ($dx + $dy) === 1,
             default => false,
         };
     }

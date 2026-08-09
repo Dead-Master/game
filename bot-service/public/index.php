@@ -4,11 +4,18 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../src/GameApiClient.php';
 require_once __DIR__ . '/../src/BotRunner.php';
-require_once __DIR__ . '/../src/StrategyFactory.php';
 require_once __DIR__ . '/../Contracts/BotStrategyInterface.php';
+require_once __DIR__ . '/../Strategies/AIAgentV2BotStrategy.php';
 require_once __DIR__ . '/../Strategies/AIAgentV3BotStrategy.php';
 require_once __DIR__ . '/../Strategies/AIAgentV3ReleaseBotStrategy.php';
+require_once __DIR__ . '/../Strategies/AIAgentV5BotStrategy.php';
+require_once __DIR__ . '/../Strategies/AIAgentV6BotStrategy.php';
+require_once __DIR__ . '/../Strategies/CodexV1BotStrategy.php';
+require_once __DIR__ . '/../Strategies/CodexV2BotStrategy.php';
+require_once __DIR__ . '/../Strategies/CodexV3BotStrategy.php';
+require_once __DIR__ . '/../Strategies/FocusBaseBotStrategy.php';
 require_once __DIR__ . '/../Strategies/ScriptedBotStrategy.php';
+require_once __DIR__ . '/../src/StrategyFactory.php';
 
 
 use BotService\BotRunner;
@@ -52,7 +59,7 @@ $payload = json_decode($raw ?: '{}', true);
 
 $gameId = (int) ($payload['game_id'] ?? 0);
 $side = (string) ($payload['side'] ?? 'player_2');
-$strategyName = (string) ($query['strategy'] ?? envOr('BOT_STRATEGY', 'scripted_p2'));
+$strategyName = (string) ($query['strategy'] ?? envOr('BOT_STRATEGY', 'codex_v2'));
 
 if ($gameId <= 0 || !in_array($side, ['player_1', 'player_2'], true)) {
     http_response_code(422);

@@ -154,8 +154,13 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
             return $ourScore;
         }
 
-        // Depth >= 2: Find enemy's best response
-        $enemyCandidates = $this->buildCandidateActions($stateAfterOurAction, $targetSide, $side);
+        if (($stateAfterOur['game']['status'] ?? 'active') !== 'active') {
+            return $ourScore;
+        }
+
+        // Depth >= 2: finish our virtual turn, then find the enemy's best response.
+        $stateForEnemy = $this->applyVirtualEndTurn($stateAfterOur, $side);
+        $enemyCandidates = $this->buildCandidateActions($stateForEnemy, $targetSide, $side);
         
         if (count($enemyCandidates) === 0) {
             // Enemy has no moves (shouldn't happen, but handle gracefully)
@@ -178,7 +183,7 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
         }
 
         // Apply enemy's best response
-        $stateAfterEnemy = $this->applyVirtualAction($stateAfterOurAction, $targetSide, $side, $bestEnemyAction);
+        $stateAfterEnemy = $this->applyVirtualAction($stateForEnemy, $targetSide, $side, $bestEnemyAction);
 
         if ($depth === 2) {
             // Depth 2: Return evaluation after enemy's move
@@ -187,8 +192,13 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
             return ($ourScore * 0.6) + ($enemyScore * 0.4);
         }
 
-        // Depth >= 3: Find our follow-up
-        $ourFollowupCandidates = $this->buildCandidateActions($stateAfterEnemy, $side, $targetSide);
+        if (($stateAfterEnemy['game']['status'] ?? 'active') !== 'active') {
+            return $this->evaluateState($stateAfterEnemy, $side) - $baseline;
+        }
+
+        // Depth >= 3: finish the enemy's virtual turn, then find our follow-up.
+        $stateForFollowup = $this->applyVirtualEndTurn($stateAfterEnemy, $targetSide);
+        $ourFollowupCandidates = $this->buildCandidateActions($stateForFollowup, $side, $targetSide);
         
         if (count($ourFollowupCandidates) === 0) {
             $enemyScore = $this->evaluateState($stateAfterEnemy, $side) - $baseline;
@@ -208,7 +218,7 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
         }
 
         // Apply our follow-up
-        $stateAfterFollowup = $this->applyVirtualAction($stateAfterEnemy, $side, $targetSide, $bestFollowupAction);
+        $stateAfterFollowup = $this->applyVirtualAction($stateForFollowup, $side, $targetSide, $bestFollowupAction);
         $followupScore = $this->evaluateState($stateAfterFollowup, $side) - $baseline;
 
         // Return weighted average: our move, enemy response, our follow-up
@@ -478,6 +488,11 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
     private function applyVirtualAction(array $state, string $side, string $targetSide, array $action): array
     {
         $next = $state;
+
+        if (($next['game']['status'] ?? 'active') !== 'active') {
+            return $next;
+        }
+
         $type = (string) ($action['type'] ?? '');
 
         if ($type === 'attack_unit') {
@@ -495,7 +510,7 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
             $defender = $next['units'][$targetIdx];
 
             $power = $this->unitAttackPower($attacker);
-            $targetHp = (int) ($defender['hp'] ?? 0) - $power;
+            $targetHp = max(0, (int) ($defender['hp'] ?? 0) - $power);
 
             $next['units'][$targetIdx]['hp'] = $targetHp;
             $next['units'][$attackerIdx]['has_attacked_this_turn'] = true;
@@ -506,7 +521,7 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
             }
 
             if ((($attacker['type'] ?? '') !== 'archer') && $this->canUnitCounterAttack($defender)) {
-                $attackerHp = (int) ($attacker['hp'] ?? 0) - $this->unitAttackPower($defender);
+                $attackerHp = max(0, (int) ($attacker['hp'] ?? 0) - $this->unitAttackPower($defender));
                 $next['units'][$attackerIdx]['hp'] = $attackerHp;
                 $next['units'][$targetIdx]['has_counter_attacked_this_turn'] = true;
 
@@ -536,7 +551,7 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
 
             if ($targetIdx !== null && $basePower > 0) {
                 $targetHp = (int) ($next['units'][$targetIdx]['hp'] ?? 0);
-                $next['units'][$targetIdx]['hp'] = $targetHp - $basePower;
+                $next['units'][$targetIdx]['hp'] = max(0, $targetHp - $basePower);
                 if ((int) $next['units'][$targetIdx]['hp'] <= 0) {
                     $next['units'][$targetIdx]['state'] = 'graveyard';
                 }
@@ -597,6 +612,15 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
                 if (($player['side'] ?? '') === $side) {
                     $supplies = (int) ($player['supplies_current'] ?? 0);
                     $next['players'][$idx]['supplies_current'] = max(0, $supplies - $cost);
+
+                    $hand = is_array($player['hand'] ?? null) ? array_values($player['hand']) : [];
+                    foreach ($hand as $handIndex => $card) {
+                        if (($card['type'] ?? null) === $unitType) {
+                            array_splice($hand, $handIndex, 1);
+                            break;
+                        }
+                    }
+                    $next['players'][$idx]['hand'] = array_values($hand);
                     break;
                 }
             }
@@ -605,6 +629,83 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
         }
 
         return $next;
+    }
+
+    private function applyVirtualEndTurn(array $state, string $endingSide): array
+    {
+        $next = $state;
+        if (($next['game']['status'] ?? 'active') !== 'active') {
+            return $next;
+        }
+
+        $nextSide = $endingSide === 'player_1' ? 'player_2' : 'player_1';
+        $newTurn = (int) ($next['game']['current_turn'] ?? 1) + 1;
+
+        $next['game']['current_turn'] = $newTurn;
+        if ($newTurn > 1 && $newTurn % 2 === 1) {
+            $next['game']['round_number'] = (int) ($next['game']['round_number'] ?? 1) + 1;
+        }
+        $next['current_player_side'] = $nextSide;
+
+        foreach (($next['players'] ?? []) as $idx => $player) {
+            $playerSide = (string) ($player['side'] ?? '');
+            if ($playerSide === $endingSide) {
+                $next['players'][$idx]['supplies_current'] = 0;
+            }
+
+            if ($playerSide !== $nextSide) {
+                continue;
+            }
+
+            $income = (int) ($player['supply_income'] ?? 5);
+            $next['players'][$idx]['supplies_current'] = $income + ($newTurn % 2 === 0 ? 1 : 0);
+            $next['players'][$idx]['base_has_attacked_this_turn'] = false;
+
+            $isFirstPersonalTurn = ($nextSide === 'player_1' && $newTurn === 1)
+                || ($nextSide === 'player_2' && $newTurn === 2);
+            if (!$isFirstPersonalTurn) {
+                $this->drawVirtualCard($next['players'][$idx]);
+            }
+        }
+
+        foreach (($next['units'] ?? []) as $idx => $unit) {
+            if (($unit['owner_side'] ?? '') !== $nextSide) {
+                continue;
+            }
+
+            $stats = $this->virtualUnitStats((string) ($unit['type'] ?? ''));
+            $next['units'][$idx]['movement_points'] = $stats['movement_points'];
+            $next['units'][$idx]['has_attacked_this_turn'] = false;
+            $next['units'][$idx]['has_counter_attacked_this_turn'] = false;
+        }
+
+        return $next;
+    }
+
+    /** @param array<string, mixed> $player */
+    private function drawVirtualCard(array &$player): void
+    {
+        $card = null;
+        if (isset($player['deck']) && is_array($player['deck']) && $player['deck'] !== []) {
+            $card = array_pop($player['deck']);
+            $player['deck_count'] = count($player['deck']);
+        } elseif ((int) ($player['deck_count'] ?? 0) > 0) {
+            $player['deck_count'] = (int) $player['deck_count'] - 1;
+            // The public state hides deck order and card types. Preserve hand size
+            // without inventing a playable card for lookahead.
+            $card = ['type' => '__unknown__'];
+        }
+
+        if (!is_array($card)) {
+            return;
+        }
+
+        $hand = is_array($player['hand'] ?? null) ? array_values($player['hand']) : [];
+        $hand[] = $card;
+        while (count($hand) > 6) {
+            array_shift($hand);
+        }
+        $player['hand'] = array_values($hand);
     }
 
     private function evaluateState(array $state, string $side): float
@@ -634,8 +735,8 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
             $myTempo += (float) (10 - min(10, $this->distanceToEnemyBase($u, $enemySide)));
             
             // Board control: count units adjacent to enemy base
-            $x = (int) ($u['x'] ?? -1);
-            $y = (int) ($u['y'] ?? -1);
+            $x = (int) ($u['position_x'] ?? -1);
+            $y = (int) ($u['position_y'] ?? -1);
             if (($enemySide === 'player_1' && $this->isAdjacentTo($x, $y, 0, 0))
                 || ($enemySide === 'player_2' && $this->isAdjacentTo($x, $y, 4, 2))) {
                 $myBoardControl += 2.0;
@@ -648,8 +749,8 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
             $enemyTempo += (float) (10 - min(10, $this->distanceToEnemyBase($u, $side)));
             
             // Enemy board control
-            $x = (int) ($u['x'] ?? -1);
-            $y = (int) ($u['y'] ?? -1);
+            $x = (int) ($u['position_x'] ?? -1);
+            $y = (int) ($u['position_y'] ?? -1);
             if (($side === 'player_1' && $this->isAdjacentTo($x, $y, 0, 0))
                 || ($side === 'player_2' && $this->isAdjacentTo($x, $y, 4, 2))) {
                 $enemyBoardControl += 2.0;
@@ -1028,9 +1129,9 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
 
         return match ($type) {
             'infantry' => ($dx + $dy === 1) || ($dx === 1 && $dy === 1),
-            'archer' => true,
+            'archer' => ($dx + $dy) === 1,
             'berserker' => ($dx + $dy) === 1,
-            'scout' => ($dx === 0 || $dy === 0),
+            'scout' => ($dx + $dy) === 1,
             default => false,
         };
     }
@@ -1116,7 +1217,11 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
             }
 
             $hp = (int) ($player['base_hp'] ?? 0);
-            $state['players'][$idx]['base_hp'] = max(0, $hp - max(0, $damage));
+            $remainingHp = max(0, $hp - max(0, $damage));
+            $state['players'][$idx]['base_hp'] = $remainingHp;
+            if ($remainingHp === 0) {
+                $state['game']['status'] = 'finished';
+            }
             return;
         }
     }
@@ -1284,7 +1389,7 @@ class AIAgentV6BotStrategy implements BotStrategyInterface
     {
         foreach (($state['players'] ?? []) as $player) {
             if (($player['side'] ?? '') === $side) {
-                return (int) ($player['supplies'] ?? $player['resources'] ?? 0);
+                return (int) ($player['supplies_current'] ?? 0);
             }
         }
 

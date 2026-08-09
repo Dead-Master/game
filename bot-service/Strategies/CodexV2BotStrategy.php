@@ -77,8 +77,15 @@ final class CodexV2BotStrategy implements BotStrategyInterface
             break;
         }
 
-        $end = $api->endTurn($gameId, $side);
-        $actions[] = $this->action('end_turn', $end);
+        $state = $api->getState($gameId);
+        if (
+            ($state['success'] ?? false) === true
+            && (($state['game']['status'] ?? 'finished') === 'active')
+            && (($state['current_player_side'] ?? '') === $side)
+        ) {
+            $end = $api->endTurn($gameId, $side);
+            $actions[] = $this->action('end_turn', $end);
+        }
 
         return [
             'status' => 'ok',
@@ -177,7 +184,7 @@ final class CodexV2BotStrategy implements BotStrategyInterface
 
         $kill = $attackerAtk >= $defenderHp;
         $isMelee = ($attacker['type'] ?? '') !== 'archer';
-        $canCounter = $isMelee && $this->canUnitCounterAttack($defender);
+        $canCounter = !$kill && $isMelee && $this->canUnitCounterAttack($defender);
 
         $score = 0;
         $score += min($attackerAtk, $defenderHp) * 12;
@@ -520,9 +527,9 @@ final class CodexV2BotStrategy implements BotStrategyInterface
 
         return match ($type) {
             'infantry' => ($dx + $dy === 1) || ($dx === 1 && $dy === 1),
-            'archer' => max($dx, $dy) <= $movement,
+            'archer' => ($dx + $dy) === 1,
             'berserker' => ($dx + $dy) === 1,
-            'scout' => ($dx === 0 || $dy === 0) && (($dx + $dy) <= $movement),
+            'scout' => ($dx + $dy) === 1,
             default => false,
         };
     }

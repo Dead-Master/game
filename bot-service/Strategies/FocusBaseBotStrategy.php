@@ -138,6 +138,13 @@ final class FocusBaseBotStrategy implements BotStrategyInterface
 
         foreach ($archers as $archer) {
             $freshState = $this->refreshState($api, $gameId);
+            if (
+                ($freshState['game']['status'] ?? 'finished') !== 'active'
+                || ($freshState['current_player_side'] ?? '') !== $side
+            ) {
+                break;
+            }
+
             $freshArcher = $this->findOwnUnitById($freshState, $side, (int) $archer['id']);
             if ($freshArcher === null || (bool) ($freshArcher['has_attacked_this_turn'] ?? false)) {
                 continue;
@@ -151,15 +158,25 @@ final class FocusBaseBotStrategy implements BotStrategyInterface
         }
 
         $state = $this->refreshState($api, $gameId);
-        if ($this->canBaseAttack($state, $side)) {
+        if (
+            ($state['game']['status'] ?? 'finished') === 'active'
+            && ($state['current_player_side'] ?? '') === $side
+            && $this->canBaseAttack($state, $side)
+        ) {
             $res = $api->attackBaseWithBase($gameId, $side, $targetSide);
             $actions[] = $this->action('attack_base_with_base', $res, [
                 'target_side' => $targetSide,
             ]);
+            $state = $this->refreshState($api, $gameId);
         }
 
-        $end = $api->endTurn($gameId, $side);
-        $actions[] = $this->action('end_turn', $end);
+        if (
+            ($state['game']['status'] ?? 'finished') === 'active'
+            && ($state['current_player_side'] ?? '') === $side
+        ) {
+            $end = $api->endTurn($gameId, $side);
+            $actions[] = $this->action('end_turn', $end);
+        }
 
         return [
             'status' => 'ok',
@@ -407,9 +424,9 @@ final class FocusBaseBotStrategy implements BotStrategyInterface
 
         return match ($type) {
             'infantry' => ($dx + $dy === 1) || ($dx === 1 && $dy === 1),
-            'archer' => max($dx, $dy) <= $movement,
+            'archer' => ($dx + $dy) === 1,
             'berserker' => ($dx + $dy) === 1,
-            'scout' => ($dx === 0 || $dy === 0) && (($dx + $dy) <= $movement),
+            'scout' => ($dx + $dy) === 1,
             default => false,
         };
     }

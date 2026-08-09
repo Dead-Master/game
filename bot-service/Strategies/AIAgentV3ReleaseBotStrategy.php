@@ -446,6 +446,10 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
     {
         $next = $state;
 
+        if (($next['game']['status'] ?? 'active') !== 'active') {
+            return $next;
+        }
+
         $type = (string) ($action['type'] ?? '');
         if ($type === 'attack_unit') {
             $attackerId = (int) ($action['attacker_id'] ?? 0);
@@ -462,7 +466,7 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
             $defender = $next['units'][$targetIdx];
 
             $power = $this->unitAttackPower($attacker);
-            $targetHp = (int) ($defender['hp'] ?? 0) - $power;
+            $targetHp = max(0, (int) ($defender['hp'] ?? 0) - $power);
 
             $next['units'][$targetIdx]['hp'] = $targetHp;
             $next['units'][$attackerIdx]['has_attacked_this_turn'] = true;
@@ -475,7 +479,7 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
 
             // Сервер наносит контратаку, если защитник выжил, а атакующий — не лучник.
             if ((($attacker['type'] ?? '') !== 'archer') && $this->canUnitCounterAttack($defender)) {
-                $attackerHp = (int) ($attacker['hp'] ?? 0) - $this->unitAttackPower($defender);
+                $attackerHp = max(0, (int) ($attacker['hp'] ?? 0) - $this->unitAttackPower($defender));
                 $next['units'][$attackerIdx]['hp'] = $attackerHp;
                 $next['units'][$targetIdx]['has_counter_attacked_this_turn'] = true;
 
@@ -506,7 +510,7 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
 
             if ($targetIdx !== null && $basePower > 0) {
                 $targetHp = (int) ($next['units'][$targetIdx]['hp'] ?? 0);
-                $next['units'][$targetIdx]['hp'] = $targetHp - $basePower;
+                $next['units'][$targetIdx]['hp'] = max(0, $targetHp - $basePower);
                 if ((int) $next['units'][$targetIdx]['hp'] <= 0) {
                     $next['units'][$targetIdx]['state'] = 'graveyard';
                 }
@@ -569,6 +573,15 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
                 if (($player['side'] ?? '') === $side) {
                     $supplies = (int) ($player['supplies_current'] ?? 0);
                     $next['players'][$idx]['supplies_current'] = max(0, $supplies - $cost);
+
+                    $hand = is_array($player['hand'] ?? null) ? array_values($player['hand']) : [];
+                    foreach ($hand as $handIndex => $card) {
+                        if (($card['type'] ?? null) === $unitType) {
+                            array_splice($hand, $handIndex, 1);
+                            break;
+                        }
+                    }
+                    $next['players'][$idx]['hand'] = array_values($hand);
                     break;
                 }
             }
@@ -887,9 +900,9 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
 
         return match ($type) {
             'infantry' => ($dx + $dy === 1) || ($dx === 1 && $dy === 1),
-            'archer' => true,
+            'archer' => ($dx + $dy) === 1,
             'berserker' => ($dx + $dy) === 1,
-            'scout' => ($dx === 0 || $dy === 0),
+            'scout' => ($dx + $dy) === 1,
             default => false,
         };
     }
@@ -977,7 +990,11 @@ class AIAgentV3ReleaseBotStrategy implements BotStrategyInterface
             }
 
             $hp = (int) ($player['base_hp'] ?? 0);
-            $state['players'][$idx]['base_hp'] = max(0, $hp - max(0, $damage));
+            $remainingHp = max(0, $hp - max(0, $damage));
+            $state['players'][$idx]['base_hp'] = $remainingHp;
+            if ($remainingHp === 0) {
+                $state['game']['status'] = 'finished';
+            }
             return;
         }
     }

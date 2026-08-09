@@ -751,7 +751,7 @@ function isMoveAllowedByType(type, movementPoints, dx, dy) {
     }
 
     if (type === 'archer') {
-        return Math.max(dx, dy) <= movementPoints;
+        return movementPoints >= 1 && (dx + dy) === 1;
     }
 
     if (type === 'berserker') {
@@ -759,7 +759,7 @@ function isMoveAllowedByType(type, movementPoints, dx, dy) {
     }
 
     if (type === 'scout') {
-        return (dx === 0 || dy === 0) && ((dx + dy) <= movementPoints);
+        return movementPoints >= 1 && (dx + dy) === 1;
     }
 
     return false;

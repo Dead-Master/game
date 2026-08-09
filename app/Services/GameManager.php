@@ -65,50 +65,72 @@ final class GameManager
 
     public function deployCard(GamePlayer $player, array $targetCell): bool
     {
-        $hand = $player->hand ?? [];
-        $handIndex = null;
-
-        foreach ($hand as $index => $card) {
-            if (($card['type'] ?? null) === $targetCell['type']) {
-                $handIndex = $index;
-                break;
+        return DB::transaction(function () use ($player, $targetCell): bool {
+            if (!$this->lockActiveGame((int) $player->game_id)) {
+                return false;
             }
-        }
 
-        if ($handIndex === null) return false;
+            $lockedPlayer = GamePlayer::query()
+                ->whereKey($player->id)
+                ->where('game_id', $player->game_id)
+                ->lockForUpdate()
+                ->first();
 
-        $basePos = $player->getPosition();
-        $isAdjacent = collect($this->getAdjacentCellsForPosition($basePos))
-            ->contains(fn($c) => $c['x'] === $targetCell['x'] && $c['y'] === $targetCell['y']);
+            if (!$lockedPlayer) {
+                return false;
+            }
 
-        if (!$isAdjacent) return false;
+            $hand = $lockedPlayer->hand ?? [];
+            $handIndex = null;
 
-        $occupied = Unit::query()
-            ->where('game_id', $player->game_id)
-            ->where('state', 'board')
-            ->where('position_x', $targetCell['x'])
-            ->where('position_y', $targetCell['y'])
-            ->exists();
+            foreach ($hand as $index => $card) {
+                if (($card['type'] ?? null) === $targetCell['type']) {
+                    $handIndex = $index;
+                    break;
+                }
+            }
 
-        if ($occupied) return false;
+            if ($handIndex === null) {
+                return false;
+            }
 
-        $card = $hand[$handIndex];
-        $cost = match ($card['type']) {
-            'archer' => 3,
-            'berserker' => 4,
-            'infantry' => 2,
-            'scout' => 1,
-        };
+            $basePos = $lockedPlayer->getPosition();
+            $isAdjacent = collect($this->getAdjacentCellsForPosition($basePos))
+                ->contains(fn($c) => $c['x'] === $targetCell['x'] && $c['y'] === $targetCell['y']);
 
-        if ($player->supplies_current < $cost) return false;
+            if (!$isAdjacent) {
+                return false;
+            }
 
-        DB::transaction(function () use ($player, $card, $targetCell, $cost, $handIndex, $hand) {
+            $occupied = Unit::query()
+                ->where('game_id', $lockedPlayer->game_id)
+                ->where('state', 'board')
+                ->where('position_x', $targetCell['x'])
+                ->where('position_y', $targetCell['y'])
+                ->exists();
+
+            if ($occupied) {
+                return false;
+            }
+
+            $card = $hand[$handIndex];
+            $cost = match ($card['type']) {
+                'archer' => 3,
+                'berserker' => 4,
+                'infantry' => 2,
+                'scout' => 1,
+            };
+
+            if ($lockedPlayer->supplies_current < $cost) {
+                return false;
+            }
+
             $stats = Unit::fromCardType($card['type']);
             $stats['movement_points'] = max(0, $stats['movement_points'] - 1);
 
             Unit::create(array_merge([
-                'game_id' => $player->game_id,
-                'owner_id' => $player->id,
+                'game_id' => $lockedPlayer->game_id,
+                'owner_id' => $lockedPlayer->id,
                 'type' => $card['type'],
                 'state' => 'board',
             ], $stats, [
@@ -118,12 +140,12 @@ final class GameManager
 
             array_splice($hand, $handIndex, 1);
 
-            $player->supplies_current -= $cost;
-            $player->hand = array_values($hand);
-            $player->save();
-        });
+            $lockedPlayer->supplies_current -= $cost;
+            $lockedPlayer->hand = array_values($hand);
+            $lockedPlayer->save();
 
-        return true;
+            return true;
+        }, 3);
     }
 
     public function moveUnit(GamePlayer $player, int $unitId, int $targetX, int $targetY): bool
@@ -152,6 +174,10 @@ final class GameManager
         }
 
         return DB::transaction(function () use ($player, $unitId, $targetX, $targetY): array|false {
+            if (!$this->lockActiveGame((int) $player->game_id)) {
+                return false;
+            }
+
             $unit = Unit::query()
                 ->where('id', $unitId)
                 ->where('game_id', $player->game_id)
@@ -229,35 +255,62 @@ final class GameManager
 
         return match ($unit->type) {
             'infantry' => ($dx + $dy === 1) || ($dx === 1 && $dy === 1),
-            'archer' => max($dx, $dy) <= $unit->movement_points,
+            'archer' => ($dx + $dy) === 1,
             'berserker' => ($dx + $dy) === 1,
-            'scout' => ($dx === 0 || $dy === 0) && (($dx + $dy) <= $unit->movement_points),
+            'scout' => ($dx + $dy) === 1,
             default => false,
         };
     }
 
     public function endTurn(Game $game, string $currentSide): bool
     {
-        $currentPlayer = $game->players()->where('side', $currentSide)->first();
-        if (!$currentPlayer) return false;
-
-        $nextSide = $currentSide === 'player_1' ? 'player_2' : 'player_1';
-        $nextPlayer = $game->players()->where('side', $nextSide)->first();
-        if (!$nextPlayer) return false;
-
-        DB::transaction(function () use ($game, $nextPlayer, $nextSide) {
-            if ($nextSide === 'player_1') {
-                $game->round_number += 1;
+        return DB::transaction(function () use ($game, $currentSide): bool {
+            $lockedGame = $this->lockActiveGame((int) $game->id);
+            if (!$lockedGame) {
+                return false;
             }
 
-            $game->current_turn += 1;
-            $game->save();
+            $expectedSide = ((int) $lockedGame->current_turn % 2 === 1) ? 'player_1' : 'player_2';
+            if ($currentSide !== $expectedSide) {
+                return false;
+            }
 
-            $this->generateSupplies($nextPlayer, $game->current_turn);
-            $this->drawCard($nextPlayer);
+            $nextSide = $currentSide === 'player_1' ? 'player_2' : 'player_1';
+
+            $currentPlayer = GamePlayer::query()
+                ->where('game_id', $lockedGame->id)
+                ->where('side', $currentSide)
+                ->lockForUpdate()
+                ->first();
+
+            $nextPlayer = GamePlayer::query()
+                ->where('game_id', $lockedGame->id)
+                ->where('side', $nextSide)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$currentPlayer || !$nextPlayer) {
+                return false;
+            }
+
+            $currentPlayer->supplies_current = 0;
+            $currentPlayer->save();
+
+            if ($nextSide === 'player_1') {
+                $lockedGame->round_number += 1;
+            }
+
+            $lockedGame->current_turn += 1;
+            $lockedGame->save();
+
+            $this->generateSupplies($nextPlayer, (int) $lockedGame->current_turn);
+
+            if ((int) $lockedGame->current_turn > 2) {
+                $this->drawCard($nextPlayer);
+            }
 
             $units = Unit::query()
-                ->where('game_id', $game->id)
+                ->where('game_id', $lockedGame->id)
                 ->where('owner_id', $nextPlayer->id)
                 ->where('state', 'board')
                 ->get();
@@ -272,9 +325,9 @@ final class GameManager
 
             $nextPlayer->base_has_attacked_this_turn = false;
             $nextPlayer->save();
-        });
 
-        return true;
+            return true;
+        }, 3);
     }
 
     private function initializePlayerDeck(GamePlayer $player): void
@@ -337,25 +390,33 @@ final class GameManager
 
     public function attackUnit(GamePlayer $player, int $attackerUnitId, int $targetUnitId): bool
     {
-        $attacker = Unit::query()
-            ->where('id', $attackerUnitId)
-            ->where('game_id', $player->game_id)
-            ->where('owner_id', $player->id)
-            ->where('state', 'board')
-            ->first();
+        return DB::transaction(function () use ($player, $attackerUnitId, $targetUnitId): bool {
+            if (!$this->lockActiveGame((int) $player->game_id)) {
+                return false;
+            }
 
-        $defender = Unit::query()
-            ->where('id', $targetUnitId)
-            ->where('game_id', $player->game_id)
-            ->where('state', 'board')
-            ->first();
+            $attacker = Unit::query()
+                ->where('id', $attackerUnitId)
+                ->where('game_id', $player->game_id)
+                ->where('owner_id', $player->id)
+                ->where('state', 'board')
+                ->lockForUpdate()
+                ->first();
 
-        if (!$attacker || !$defender) return false;
-        if ($attacker->owner_id === $defender->owner_id) return false;
-        if ($attacker->has_attacked_this_turn) return false;
-        if (!$this->isInAttackRange($attacker, $defender)) return false;
+            $defender = Unit::query()
+                ->where('id', $targetUnitId)
+                ->where('game_id', $player->game_id)
+                ->where('state', 'board')
+                ->lockForUpdate()
+                ->first();
 
-        return $this->resolveAttack($attacker, $defender);
+            if (!$attacker || !$defender) return false;
+            if ($attacker->owner_id === $defender->owner_id) return false;
+            if ($attacker->has_attacked_this_turn) return false;
+            if (!$this->isInAttackRange($attacker, $defender)) return false;
+
+            return $this->resolveAttack($attacker, $defender);
+        }, 3);
     }
 
     private function isInAttackRange(Unit $attacker, Unit $defender): bool
@@ -372,82 +433,105 @@ final class GameManager
 
     private function resolveAttack(Unit $attacker, Unit $defender): bool
     {
-        DB::transaction(function () use ($attacker, $defender) {
-            $defender->hp -= $attacker->attack_power;
-            $attacker->has_attacked_this_turn = true;
+        $defender->hp = max(0, (int) $defender->hp - (int) $attacker->attack_power);
+        $attacker->has_attacked_this_turn = true;
 
-            $defenderDied = $defender->hp <= 0;
+        $defenderDied = $defender->hp <= 0;
 
-            if ($defenderDied) {
-                $defender->state = 'graveyard';
-                $defender->position_x = null;
-                $defender->position_y = null;
-            }
+        if ($defenderDied) {
+            $defender->state = 'graveyard';
+            $defender->position_x = null;
+            $defender->position_y = null;
+        }
 
+        $defender->save();
+
+        $canDefenderCounter = !$defenderDied
+            && $attacker->type !== 'archer'
+            && $defender->canCounterAttack();
+
+        if ($canDefenderCounter) {
+            $attacker->hp = max(0, (int) $attacker->hp - (int) $defender->attack_power);
+            $defender->has_counter_attacked_this_turn = true;
             $defender->save();
+        }
 
-            $canDefenderCounter = !$defenderDied
-                && $attacker->type !== 'archer'
-                && $defender->canCounterAttack();
+        if ($attacker->hp <= 0) {
+            $attacker->state = 'graveyard';
+            $attacker->position_x = null;
+            $attacker->position_y = null;
+        }
 
-            if ($canDefenderCounter) {
-                $attacker->hp -= $defender->attack_power;
-                $defender->has_counter_attacked_this_turn = true;
-                $defender->save();
-            }
-
-            if ($attacker->hp <= 0) {
-                $attacker->state = 'graveyard';
-                $attacker->position_x = null;
-                $attacker->position_y = null;
-            }
-
-            $attacker->save();
-        });
+        $attacker->save();
 
         return true;
     }
 
     public function attackBaseWithBase(GamePlayer $player, string $targetSide): bool
     {
-        if ($player->base_has_attacked_this_turn) return false;
-        if ($player->side === $targetSide) return false;
+        return DB::transaction(function () use ($player, $targetSide): bool {
+            $lockedGame = $this->lockActiveGame((int) $player->game_id);
+            if (!$lockedGame) {
+                return false;
+            }
 
-        $targetPlayer = GamePlayer::query()
-            ->where('game_id', $player->game_id)
-            ->where('side', $targetSide)
-            ->first();
+            $lockedPlayer = GamePlayer::query()
+                ->whereKey($player->id)
+                ->where('game_id', $lockedGame->id)
+                ->lockForUpdate()
+                ->first();
 
-        if (!$targetPlayer) return false;
+            if (!$lockedPlayer) return false;
+            if ($lockedPlayer->base_has_attacked_this_turn) return false;
+            if ($lockedPlayer->side === $targetSide) return false;
 
-        DB::transaction(function () use ($player, $targetPlayer) {
-            $targetPlayer->base_hp = max(0, $targetPlayer->base_hp - $player->base_attack);
-            $player->base_has_attacked_this_turn = true;
+            $targetPlayer = GamePlayer::query()
+                ->where('game_id', $lockedGame->id)
+                ->where('side', $targetSide)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$targetPlayer) return false;
+
+            $targetPlayer->base_hp = max(0, (int) $targetPlayer->base_hp - (int) $lockedPlayer->base_attack);
+            $lockedPlayer->base_has_attacked_this_turn = true;
 
             $targetPlayer->save();
-            $player->save();
+            $lockedPlayer->save();
 
-            $this->finishGameIfBaseDestroyed($targetPlayer);
-        });
+            $this->finishGameIfBaseDestroyed($targetPlayer, $lockedGame);
 
-        return true;
+            return true;
+        }, 3);
     }
 
     public function attackUnitWithBase(GamePlayer $player, int $targetUnitId): bool
     {
-        if ($player->base_has_attacked_this_turn) return false;
+        return DB::transaction(function () use ($player, $targetUnitId): bool {
+            if (!$this->lockActiveGame((int) $player->game_id)) {
+                return false;
+            }
 
-        $defender = Unit::query()
-            ->where('id', $targetUnitId)
-            ->where('game_id', $player->game_id)
-            ->where('state', 'board')
-            ->first();
+            $lockedPlayer = GamePlayer::query()
+                ->whereKey($player->id)
+                ->where('game_id', $player->game_id)
+                ->lockForUpdate()
+                ->first();
 
-        if (!$defender) return false;
-        if ($defender->owner_id === $player->id) return false;
+            if (!$lockedPlayer) return false;
+            if ($lockedPlayer->base_has_attacked_this_turn) return false;
 
-        DB::transaction(function () use ($player, $defender) {
-            $defender->hp -= $player->base_attack;
+            $defender = Unit::query()
+                ->where('id', $targetUnitId)
+                ->where('game_id', $lockedPlayer->game_id)
+                ->where('state', 'board')
+                ->lockForUpdate()
+                ->first();
+
+            if (!$defender) return false;
+            if ($defender->owner_id === $lockedPlayer->id) return false;
+
+            $defender->hp = max(0, (int) $defender->hp - (int) $lockedPlayer->base_attack);
 
             if ($defender->hp <= 0) {
                 $defender->state = 'graveyard';
@@ -457,67 +541,90 @@ final class GameManager
 
             $defender->save();
 
-            $player->base_has_attacked_this_turn = true;
-            $player->save();
-        });
+            $lockedPlayer->base_has_attacked_this_turn = true;
+            $lockedPlayer->save();
 
-        return true;
+            return true;
+        }, 3);
     }
 
     public function attackBaseWithUnit(GamePlayer $player, int $attackerUnitId, string $targetSide): bool
     {
-        if ($player->side === $targetSide) return false;
-
-        $attacker = Unit::query()
-            ->where('id', $attackerUnitId)
-            ->where('game_id', $player->game_id)
-            ->where('owner_id', $player->id)
-            ->where('state', 'board')
-            ->first();
-
-        $targetPlayer = GamePlayer::query()
-            ->where('game_id', $player->game_id)
-            ->where('side', $targetSide)
-            ->first();
-
-        if (!$attacker || !$targetPlayer) return false;
-        if ($attacker->has_attacked_this_turn) return false;
-
-        $targetBase = $targetPlayer->getPosition();
-
-        if ($attacker->type !== 'archer') {
-            $dx = abs((int) $attacker->position_x - $targetBase['x']);
-            $dy = abs((int) $attacker->position_y - $targetBase['y']);
-            if (max($dx, $dy) !== 1) {
+        return DB::transaction(function () use ($player, $attackerUnitId, $targetSide): bool {
+            $lockedGame = $this->lockActiveGame((int) $player->game_id);
+            if (!$lockedGame) {
                 return false;
             }
-        }
 
-        DB::transaction(function () use ($attacker, $targetPlayer) {
-            $targetPlayer->base_hp = max(0, $targetPlayer->base_hp - $attacker->attack_power);
+            $lockedPlayer = GamePlayer::query()
+                ->whereKey($player->id)
+                ->where('game_id', $lockedGame->id)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$lockedPlayer) return false;
+            if ($lockedPlayer->side === $targetSide) return false;
+
+            $attacker = Unit::query()
+                ->where('id', $attackerUnitId)
+                ->where('game_id', $lockedGame->id)
+                ->where('owner_id', $lockedPlayer->id)
+                ->where('state', 'board')
+                ->lockForUpdate()
+                ->first();
+
+            $targetPlayer = GamePlayer::query()
+                ->where('game_id', $lockedGame->id)
+                ->where('side', $targetSide)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$attacker || !$targetPlayer) return false;
+            if ($attacker->has_attacked_this_turn) return false;
+
+            $targetBase = $targetPlayer->getPosition();
+
+            if ($attacker->type !== 'archer') {
+                $dx = abs((int) $attacker->position_x - $targetBase['x']);
+                $dy = abs((int) $attacker->position_y - $targetBase['y']);
+                if (max($dx, $dy) !== 1) {
+                    return false;
+                }
+            }
+
+            $targetPlayer->base_hp = max(0, (int) $targetPlayer->base_hp - (int) $attacker->attack_power);
             $attacker->has_attacked_this_turn = true;
 
             $attacker->save();
             $targetPlayer->save();
 
-            $this->finishGameIfBaseDestroyed($targetPlayer);
-        });
+            $this->finishGameIfBaseDestroyed($targetPlayer, $lockedGame);
 
-        return true;
+            return true;
+        }, 3);
     }
 
-    private function finishGameIfBaseDestroyed(GamePlayer $targetPlayer): void
+    private function finishGameIfBaseDestroyed(GamePlayer $targetPlayer, Game $game): void
     {
         if ($targetPlayer->base_hp > 0) {
             return;
         }
 
-        $game = Game::find($targetPlayer->game_id);
-        if (!$game) {
-            return;
-        }
-
         $game->status = 'finished';
         $game->save();
+    }
+
+    private function lockActiveGame(int $gameId): ?Game
+    {
+        $game = Game::query()
+            ->whereKey($gameId)
+            ->lockForUpdate()
+            ->first();
+
+        if (!$game || $game->status !== 'active') {
+            return null;
+        }
+
+        return $game;
     }
 }

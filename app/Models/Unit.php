@@ -73,6 +73,6 @@ class Unit extends Model
 
     public function isMobileInAnyDirection(): bool
     {
-        return $this->type === 'archer' || $this->type === 'infantry';
+        return $this->type === 'infantry';
     }
 }

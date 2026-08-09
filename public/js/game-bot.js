@@ -47,6 +47,12 @@
         return getBoardUnits(state).filter(u => u.owner_side !== side);
     }
 
+    function isActiveBotTurn(state) {
+        return !!state?.success
+            && state?.game?.status === 'active'
+            && state?.current_player_side === BOT_SIDE;
+    }
+
     function unitAt(state, x, y) {
         return getBoardUnits(state).find(u => u.position_x === x && u.position_y === y) || null;
     }
@@ -64,9 +70,9 @@
         const dy = Math.abs(unit.position_y - targetY);
 
         if (unit.type === 'infantry') return (dx + dy === 1) || (dx === 1 && dy === 1);
-        if (unit.type === 'archer') return Math.max(dx, dy) <= unit.movement_points;
+        if (unit.type === 'archer') return unit.movement_points >= 1 && (dx + dy) === 1;
         if (unit.type === 'berserker') return (dx + dy) === 1;
-        if (unit.type === 'scout') return (dx === 0 || dy === 0) && ((dx + dy) <= unit.movement_points);
+        if (unit.type === 'scout') return unit.movement_points >= 1 && (dx + dy) === 1;
 
         return false;
     }
@@ -185,6 +191,8 @@
 
     async function botTryAttackBestForUnit(gameId, attackerId) {
         const fresh = await fetchGameStateRaw(gameId);
+        if (!isActiveBotTurn(fresh)) return false;
+
         const attacker = getOwnUnits(fresh, BOT_SIDE).find(u => u.id === attackerId);
         if (!attacker || attacker.has_attacked_this_turn) return false;
 
@@ -201,7 +209,7 @@
 
     async function runBotTurn(gameId) {
         let state = await fetchGameStateRaw(gameId);
-        if (!state.success || state.current_player_side !== BOT_SIDE) return;
+        if (!isActiveBotTurn(state)) return;
 
         // Спец-ветка: если на (4,1) стоит не арчер
         let unitAt41 = unitAt(state, 4, 1);
@@ -247,7 +255,10 @@
                 }
             }
 
-            await botEndTurn(gameId);
+            state = await fetchGameStateRaw(gameId);
+            if (isActiveBotTurn(state)) {
+                await botEndTurn(gameId);
+            }
             return;
         }
 
@@ -276,6 +287,7 @@
             await botAttackBaseWithUnit(gameId, unitAt01.id);
             await sleep(120);
             state = await fetchGameStateRaw(gameId);
+            if (!isActiveBotTurn(state)) return;
         }
 
         // 4) unit at (0,2) -> (0,1) -> attack base
@@ -292,6 +304,7 @@
                 await botAttackBaseWithUnit(gameId, unitAt01.id);
                 await sleep(120);
                 state = await fetchGameStateRaw(gameId);
+                if (!isActiveBotTurn(state)) return;
             }
         }
 
@@ -394,7 +407,10 @@
         }
 
         // 9) end turn
-        await botEndTurn(gameId);
+        state = await fetchGameStateRaw(gameId);
+        if (isActiveBotTurn(state)) {
+            await botEndTurn(gameId);
+        }
     }
 
     async function maybeRunBotTurn(gameId) {

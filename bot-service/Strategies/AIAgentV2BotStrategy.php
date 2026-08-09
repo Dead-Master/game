@@ -74,12 +74,19 @@ final class AIAgentV2BotStrategy implements BotStrategyInterface
             }
         }
 
-        $end = $api->endTurn($gameId, $side);
-        $actions[] = [
-            'action' => 'end_turn',
-            'success' => (bool) ($end['success'] ?? false),
-            'http_code' => (int) ($end['_http_code'] ?? 0),
-        ];
+        $state = $api->getState($gameId);
+        $canEndTurn = ($state['success'] ?? false) === true
+            && (($state['game']['status'] ?? 'finished') === 'active')
+            && (($state['current_player_side'] ?? '') === $side);
+
+        if ($canEndTurn) {
+            $end = $api->endTurn($gameId, $side);
+            $actions[] = [
+                'action' => 'end_turn',
+                'success' => (bool) ($end['success'] ?? false),
+                'http_code' => (int) ($end['_http_code'] ?? 0),
+            ];
+        }
 
         return [
             'status' => 'ok',
@@ -248,6 +255,10 @@ final class AIAgentV2BotStrategy implements BotStrategyInterface
     {
         $next = $state;
 
+        if (($next['game']['status'] ?? 'active') !== 'active') {
+            return $next;
+        }
+
         $type = (string) ($action['type'] ?? '');
         if ($type === 'attack_unit') {
             $attackerId = (int) ($action['attacker_id'] ?? 0);
@@ -260,13 +271,27 @@ final class AIAgentV2BotStrategy implements BotStrategyInterface
                 return $next;
             }
 
-            $power = $this->unitAttackPower($next['units'][$attackerIdx]);
-            $targetHp = (int) ($next['units'][$targetIdx]['hp'] ?? 0);
-            $next['units'][$targetIdx]['hp'] = $targetHp - $power;
+            $attacker = $next['units'][$attackerIdx];
+            $defender = $next['units'][$targetIdx];
+            $power = $this->unitAttackPower($attacker);
+            $targetHp = max(0, (int) ($defender['hp'] ?? 0) - $power);
+            $next['units'][$targetIdx]['hp'] = $targetHp;
             $next['units'][$attackerIdx]['has_attacked_this_turn'] = true;
 
-            if ((int) $next['units'][$targetIdx]['hp'] <= 0) {
+            if ($targetHp === 0) {
                 $next['units'][$targetIdx]['state'] = 'graveyard';
+
+                return $next;
+            }
+
+            if ((($attacker['type'] ?? '') !== 'archer') && $this->canUnitCounterAttack($defender)) {
+                $attackerHp = max(0, (int) ($attacker['hp'] ?? 0) - $this->unitAttackPower($defender));
+                $next['units'][$attackerIdx]['hp'] = $attackerHp;
+                $next['units'][$targetIdx]['has_counter_attacked_this_turn'] = true;
+
+                if ($attackerHp === 0) {
+                    $next['units'][$attackerIdx]['state'] = 'graveyard';
+                }
             }
 
             return $next;
@@ -291,8 +316,8 @@ final class AIAgentV2BotStrategy implements BotStrategyInterface
 
             if ($targetIdx !== null && $basePower > 0) {
                 $targetHp = (int) ($next['units'][$targetIdx]['hp'] ?? 0);
-                $next['units'][$targetIdx]['hp'] = $targetHp - $basePower;
-                if ((int) $next['units'][$targetIdx]['hp'] <= 0) {
+                $next['units'][$targetIdx]['hp'] = max(0, $targetHp - $basePower);
+                if ((int) $next['units'][$targetIdx]['hp'] === 0) {
                     $next['units'][$targetIdx]['state'] = 'graveyard';
                 }
             }
@@ -312,8 +337,18 @@ final class AIAgentV2BotStrategy implements BotStrategyInterface
             $unitId = (int) ($action['unit_id'] ?? 0);
             $idx = $this->findUnitIndexById($next, $unitId);
             if ($idx !== null) {
-                $next['units'][$idx]['position_x'] = (int) ($action['x'] ?? 0);
-                $next['units'][$idx]['position_y'] = (int) ($action['y'] ?? 0);
+                $toX = (int) ($action['x'] ?? 0);
+                $toY = (int) ($action['y'] ?? 0);
+                $dx = abs((int) ($next['units'][$idx]['position_x'] ?? 0) - $toX);
+                $dy = abs((int) ($next['units'][$idx]['position_y'] ?? 0) - $toY);
+                $cost = max($dx, $dy);
+
+                $next['units'][$idx]['position_x'] = $toX;
+                $next['units'][$idx]['position_y'] = $toY;
+                $next['units'][$idx]['movement_points'] = max(
+                    0,
+                    (int) ($next['units'][$idx]['movement_points'] ?? 0) - $cost
+                );
             }
 
             return $next;
@@ -338,9 +373,30 @@ final class AIAgentV2BotStrategy implements BotStrategyInterface
                 'position_y' => (int) ($action['y'] ?? 0),
                 'hp' => $stats['hp'],
                 'attack_power' => $stats['attack_power'],
-                'movement_points' => $stats['movement_points'],
+                'movement_points' => max(0, $stats['movement_points'] - 1),
                 'has_attacked_this_turn' => false,
+                'has_counter_attacked_this_turn' => false,
             ];
+
+            $cost = self::CARD_COSTS[$unitType] ?? 0;
+            foreach (($next['players'] ?? []) as $idx => $candidate) {
+                if (($candidate['side'] ?? '') !== $side) {
+                    continue;
+                }
+
+                $supplies = (int) ($candidate['supplies_current'] ?? 0);
+                $next['players'][$idx]['supplies_current'] = max(0, $supplies - $cost);
+
+                $hand = is_array($candidate['hand'] ?? null) ? array_values($candidate['hand']) : [];
+                foreach ($hand as $handIndex => $card) {
+                    if (($card['type'] ?? null) === $unitType) {
+                        array_splice($hand, $handIndex, 1);
+                        break;
+                    }
+                }
+                $next['players'][$idx]['hand'] = array_values($hand);
+                break;
+            }
 
             return $next;
         }
@@ -541,6 +597,20 @@ final class AIAgentV2BotStrategy implements BotStrategyInterface
         return max($dx, $dy) === 1;
     }
 
+    private function canUnitCounterAttack(array $unit): bool
+    {
+        if ((bool) ($unit['has_counter_attacked_this_turn'] ?? false)) {
+            return false;
+        }
+
+        $type = (string) ($unit['type'] ?? '');
+        if ($type === 'berserker') {
+            return !((bool) ($unit['has_attacked_this_turn'] ?? false));
+        }
+
+        return $type === 'infantry' || $type === 'scout';
+    }
+
     private function canBaseAttack(array $state, string $side): bool
     {
         foreach (($state['players'] ?? []) as $player) {
@@ -597,9 +667,9 @@ final class AIAgentV2BotStrategy implements BotStrategyInterface
 
         return match ($type) {
             'infantry' => ($dx + $dy === 1) || ($dx === 1 && $dy === 1),
-            'archer' => max($dx, $dy) <= $movement,
+            'archer' => ($dx + $dy) === 1,
             'berserker' => ($dx + $dy) === 1,
-            'scout' => ($dx === 0 || $dy === 0) && (($dx + $dy) <= $movement),
+            'scout' => ($dx + $dy) === 1,
             default => false,
         };
     }
@@ -678,7 +748,7 @@ final class AIAgentV2BotStrategy implements BotStrategyInterface
     {
         foreach (($state['players'] ?? []) as $player) {
             if (($player['side'] ?? '') === $side) {
-                return (int) ($player['base_attack_power'] ?? 0);
+                return (int) ($player['base_attack'] ?? $player['base_attack_power'] ?? 0);
             }
         }
 
@@ -693,7 +763,11 @@ final class AIAgentV2BotStrategy implements BotStrategyInterface
             }
 
             $hp = (int) ($player['base_hp'] ?? 0);
-            $state['players'][$idx]['base_hp'] = max(0, $hp - max(0, $damage));
+            $remainingHp = max(0, $hp - max(0, $damage));
+            $state['players'][$idx]['base_hp'] = $remainingHp;
+            if ($remainingHp === 0) {
+                $state['game']['status'] = 'finished';
+            }
             return;
         }
     }

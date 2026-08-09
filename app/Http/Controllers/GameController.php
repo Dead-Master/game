@@ -10,6 +10,7 @@ use App\Models\Unit;
 use App\Services\GameManager;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class GameController extends Controller
 {
@@ -18,61 +19,47 @@ class GameController extends Controller
         $validated = $request->validate([
             'player_1_name' => ['required', 'string', 'max:50'],
             'player_2_name' => ['required', 'string', 'max:50', 'different:player_1_name'],
-            'bot_strategy' => ['nullable', 'in:codex_v1,codex_v2,focus_base,scripted,ai_agent_v3,ai_agent_v3_release'],
+            'bot_strategy' => [
+                'nullable',
+                'in:codex_v1,codex_v2,codex_v3,focus_base,scripted,ai_agent_v2,ai_agent_v3,ai_agent_v3_release,ai_agent_v5,ai_agent_v6',
+            ],
             'run_mode' => ['nullable', 'in:web,cli'],
         ]);
 
         $botStrategy = (string) ($validated['bot_strategy'] ?? 'codex_v2');
         $runMode = (string) ($validated['run_mode'] ?? 'web');
 
-        $game = Game::create([
-            'player_1_name' => $validated['player_1_name'],
-            'player_2_name' => $validated['player_2_name'],
-            'status' => 'active',
-            'current_turn' => 1,
-            'round_number' => 1,
-            'bot_strategy' => $botStrategy,
-        ]);
+        $game = DB::transaction(function () use ($validated, $botStrategy): Game {
+            $game = Game::create([
+                'player_1_name' => $validated['player_1_name'],
+                'player_2_name' => $validated['player_2_name'],
+                'status' => 'active',
+                'current_turn' => 1,
+                'round_number' => 1,
+                'bot_strategy' => $botStrategy,
+            ]);
+
+            foreach (['player_1', 'player_2'] as $side) {
+                GamePlayer::create([
+                    'game_id' => $game->id,
+                    'side' => $side,
+                    'base_hp' => 20,
+                    'base_attack' => 1,
+                    'supply_income' => 5,
+                    'supplies_current' => 5,
+                    'hand' => [],
+                    'deck' => [],
+                ]);
+            }
+
+            (new GameManager())->initializeGame($game);
+
+            return $game;
+        });
 
         if ($runMode === 'cli') {
             Cache::put($this->gameModeCacheKey((int) $game->id), 'cli', now()->addHours(12));
         }
-
-        GamePlayer::create([
-            'game_id' => $game->id,
-            'side' => 'player_1',
-            'base_hp' => 25,
-            'base_attack' => 1,
-            'supply_income' => 1,
-            'supplies_current' => 5,
-            'hand' => [],
-            'deck' => [],
-        ]);
-
-        GamePlayer::create([
-            'game_id' => $game->id,
-            'side' => 'player_1',
-            'base_hp' => 25,
-            'base_attack' => 1,
-            'supply_income' => 1,
-            'supplies_current' => 5,
-            'hand' => [],
-            'deck' => [],
-        ]);
-
-        GamePlayer::create([
-            'game_id' => $game->id,
-            'side' => 'player_2',
-            'base_hp' => 25,
-            'base_attack' => 1,
-            'supply_income' => 1,
-            'supplies_current' => 5,
-            'hand' => [],
-            'deck' => [],
-        ]);
-
-        $gameManager = new GameManager();
-        $gameManager->initializeGame($game);
 
         if ($request->expectsJson() || $request->is('api/*')) {
             return response()->json([
@@ -328,6 +315,10 @@ class GameController extends Controller
         try {
             $game = Game::findOrFail($gameId);
 
+            if ($game->status === 'finished') {
+                return response()->json(['success' => false, 'error' => 'Game is finished'], 409);
+            }
+
             $validated = $request->validate([
                 'side' => ['required', 'in:player_1,player_2'],
                 'type' => ['required', 'in:archer,berserker,infantry,scout'],
@@ -410,6 +401,10 @@ class GameController extends Controller
         try {
             $game = Game::findOrFail($gameId);
 
+            if ($game->status === 'finished') {
+                return response()->json(['success' => false, 'error' => 'Game is finished'], 409);
+            }
+
             $validated = $request->validate([
                 'side' => ['required', 'in:player_1,player_2'],
                 'unit_id' => ['required', 'integer'],
@@ -460,6 +455,10 @@ class GameController extends Controller
     {
         try {
             $game = Game::findOrFail($gameId);
+
+            if ($game->status === 'finished') {
+                return response()->json(['success' => false, 'error' => 'Game is finished'], 409);
+            }
 
             $validated = $request->validate([
                 'side' => ['required', 'in:player_1,player_2'],
@@ -568,6 +567,10 @@ class GameController extends Controller
         try {
             $game = Game::findOrFail($gameId);
 
+            if ($game->status === 'finished') {
+                return response()->json(['success' => false, 'error' => 'Game is finished'], 409);
+            }
+
             $validated = $request->validate([
                 'side' => ['required', 'in:player_1,player_2'],
                 'attacker_unit_id' => ['required', 'integer'],
@@ -633,17 +636,6 @@ class GameController extends Controller
                     'target_died' => $targetDied,
                 ]);
 
-                if ($game->status === 'finished') {
-                    $loser = $game->players()->where('base_hp', '<=', 0)->first();
-                    $winnerSide = $loser?->side === 'player_1' ? 'player_2' : ($loser?->side === 'player_2' ? 'player_1' : null);
-
-                    GameEvent::record($game, $validated['side'], GameEvent::TYPE_GAME_FINISHED, [
-                        'winner_side' => $winnerSide,
-                        'loser_side' => $loser?->side,
-                        'reason' => 'base_destroyed',
-                    ]);
-                }
-
                 return response()->json(['success' => true]);
             }
 
@@ -657,6 +649,12 @@ class GameController extends Controller
     {
         try {
             $game = Game::findOrFail($gameId);
+
+            if ($game->status === 'finished') {
+                return response()->json(['success' => false, 'error' => 'Game is finished'], 409);
+            }
+
+            $wasActive = $game->status === 'active';
 
             $validated = $request->validate([
                 'side' => ['required', 'in:player_1,player_2'],
@@ -802,10 +800,9 @@ class GameController extends Controller
                     GameEvent::record($game, $validated['side'], $eventType, $eventPayload);
                 }
 
-                $wasFinished = $game->status === 'finished';
                 $game->refresh();
 
-                if (!$wasFinished && $game->status === 'finished') {
+                if ($wasActive && $game->status === 'finished') {
                     $loser = $game->players()->where('base_hp', '<=', 0)->first();
                     $winnerSide = $loser?->side === 'player_1' ? 'player_2' : ($loser?->side === 'player_2' ? 'player_1' : null);
 
