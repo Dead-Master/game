@@ -28,19 +28,13 @@ RUN apt-get update \
         unzip \
     && docker-php-ext-install -j"$(nproc)" \
         bcmath \
-        curl \
-        dom \
         intl \
-        mbstring \
         pcntl \
         pdo_mysql \
-        pdo_sqlite \
-        xml \
-        xmlwriter \
         zip \
-        opcache \
     && pecl install redis \
     && docker-php-ext-enable redis \
+    && php -r '$required = ["bcmath", "curl", "dom", "intl", "mbstring", "pcntl", "pdo_mysql", "pdo_sqlite", "redis", "xml", "xmlwriter", "zip"]; $loaded = array_map("strtolower", get_loaded_extensions()); $missing = array_diff($required, $loaded); if ($missing) { fwrite(STDERR, "Missing PHP extensions: ".implode(", ", $missing).PHP_EOL); exit(1); }' \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
