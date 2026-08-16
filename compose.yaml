@@ -1,0 +1,144 @@
+x-app-environment: &app-environment
+  APP_NAME: Battle Grid
+  APP_ENV: local
+  APP_KEY: ${DOCKER_APP_KEY:-base64:7xBMf3EJQYWHbFHXqV7dc5lSspuP4PybDTKI3hkcYTQ=}
+  APP_DEBUG: "true"
+  APP_URL: ${DOCKER_APP_URL:-http://localhost:8080}
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: debug
+  DB_CONNECTION: mysql
+  DB_HOST: db
+  DB_PORT: 3306
+  DB_DATABASE: ${DOCKER_DB_DATABASE:-game}
+  DB_USERNAME: ${DOCKER_DB_USERNAME:-game}
+  DB_PASSWORD: ${DOCKER_DB_PASSWORD:-game}
+  REDIS_CLIENT: phpredis
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_DB: 0
+  REDIS_CACHE_DB: 1
+  SESSION_DRIVER: redis
+  SESSION_CONNECTION: default
+  CACHE_STORE: redis
+  QUEUE_CONNECTION: redis
+  BROADCAST_CONNECTION: log
+  BOT_SERVICE_ENABLED: "true"
+  BOT_SERVICE_BASE_URL: http://bot:8090
+  BOT_SERVICE_TOKEN: ${DOCKER_BOT_SERVICE_TOKEN:-local-bot-token}
+  BOT_SERVICE_TIMEOUT_SECONDS: 30
+  BOT_SIDE: player_2
+
+x-app-build: &app-build
+  context: "${DOCKER_BUILD_CONTEXT:-https://github.com/Dead-Master/game.git#master}"
+  target: app
+
+services:
+  db:
+    image: mariadb:12.3
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${DOCKER_DB_DATABASE:-game}
+      MARIADB_USER: ${DOCKER_DB_USERNAME:-game}
+      MARIADB_PASSWORD: ${DOCKER_DB_PASSWORD:-game}
+      MARIADB_ROOT_PASSWORD: ${DOCKER_DB_ROOT_PASSWORD:-root}
+    ports:
+      - "${DOCKER_DB_FORWARD_PORT:-3307}:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: *app-build
+    restart: unless-stopped
+    environment:
+      <<: *app-environment
+      RUN_MIGRATIONS: "true"
+    volumes:
+      - app_storage:/var/www/html/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/app-ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nginx:
+    build:
+      context: "${DOCKER_BUILD_CONTEXT:-https://github.com/Dead-Master/game.git#master}"
+      target: web
+    restart: unless-stopped
+    ports:
+      - "${DOCKER_APP_PORT:-8080}:80"
+    volumes:
+      - app_storage:/var/www/html/storage:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/up"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  bot:
+    build: *app-build
+    restart: unless-stopped
+    command: ["php", "-S", "0.0.0.0:8090", "bot-service/public/index.php"]
+    environment:
+      RUN_MIGRATIONS: "false"
+      SKIP_LARAVEL_BOOTSTRAP: "true"
+      GAME_API_BASE_URL: http://nginx
+      BOT_SERVICE_TOKEN: ${DOCKER_BOT_SERVICE_TOKEN:-local-bot-token}
+      BOT_STRATEGY: ${DOCKER_BOT_STRATEGY:-codex_v2}
+    ports:
+      - "${DOCKER_BOT_PORT:-8090}:8090"
+    healthcheck:
+      test: ["CMD", "php", "-r", "$$socket = @fsockopen('127.0.0.1', 8090); exit($$socket ? 0 : 1);"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      nginx:
+        condition: service_healthy
+
+  queue:
+    build: *app-build
+    restart: unless-stopped
+    command: ["php", "artisan", "queue:work", "--sleep=1", "--tries=2", "--timeout=30"]
+    environment:
+      <<: *app-environment
+      RUN_MIGRATIONS: "false"
+    volumes:
+      - app_storage:/var/www/html/storage
+    depends_on:
+      app:
+        condition: service_healthy
+      bot:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  app_storage:
+  db_data:
+  redis_data:

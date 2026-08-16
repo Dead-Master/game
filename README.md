@@ -1,3 +1,65 @@
+# Battle Grid
+
+## Установка из Git и запуск в Docker
+
+Требуются Docker Engine, Docker Compose v2 и включённый BuildKit. Исходный код при сборке скачивается из публичной ветки `master` репозитория `https://github.com/Dead-Master/game.git`.
+
+На чистом сервере достаточно скачать Compose-файл и запустить сборку:
+
+```bash
+mkdir -p battle-grid && cd battle-grid
+curl -fsSLO https://raw.githubusercontent.com/Dead-Master/game/master/compose.yaml
+docker compose up --build -d
+```
+
+Из уже клонированного рабочего каталога команда та же:
+
+```bash
+docker compose up --build -d
+```
+
+Пока Docker-файлы ещё не отправлены в Git, локальную версию можно собрать так:
+
+```bash
+DOCKER_BUILD_CONTEXT=. docker compose up --build -d
+```
+
+После запуска:
+
+- игра: <http://localhost:8080>;
+- bot-service: <http://localhost:8090> (служебный API, обычный `GET` вернёт 404);
+- MariaDB 12.3 на хосте: `127.0.0.1:3307`;
+- актуальная стабильная Redis 8 доступна контейнерам во внутренней Docker-сети.
+
+Миграции выполняются автоматически при старте контейнера `app`. Сессии, кэш и очередь Laravel используют Redis; обработчик очереди и bot-service запускаются отдельными контейнерами.
+
+Проверить состояние и посмотреть логи:
+
+```bash
+docker compose ps
+docker compose logs -f app nginx queue bot
+```
+
+Запустить тесты:
+
+```bash
+docker compose exec app php artisan test
+```
+
+Остановить проект:
+
+```bash
+docker compose down
+```
+
+База и файлы хранилища сохраняются в Docker volumes. Чтобы удалить и их тоже, используйте `docker compose down -v` — это безвозвратно удалит данные Docker-окружения проекта.
+
+Git-контекст, порты, реквизиты базы и стратегию бота можно переопределить переменными `DOCKER_*` из [.env.docker.example](.env.docker.example). Например, для сборки конкретного коммита задайте `DOCKER_BUILD_CONTEXT=https://github.com/Dead-Master/game.git#<commit-sha>`. Docker Compose автоматически читает файл `.env`, поэтому нужные `DOCKER_*` можно добавить в него или передать перед командой запуска.
+
+> В текущей конфигурации broadcasting пишет события в лог. Для обновления состояния игры между двумя открытыми браузерами потребуется обновление страницы; подключение WebSocket-сервера настраивается отдельно.
+
+---
+
 <p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
 
 <p align="center">
