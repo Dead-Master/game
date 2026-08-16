@@ -54,8 +54,7 @@ COPY --from=frontend /frontend/public/build ./public/build
 COPY docker/php/conf.d/app.ini /usr/local/etc/php/conf.d/99-app.ini
 COPY docker/php/entrypoint.sh /usr/local/bin/docker-entrypoint
 
-RUN composer dump-autoload --optimize --no-interaction \
-    && chmod +x /usr/local/bin/docker-entrypoint \
+RUN chmod +x /usr/local/bin/docker-entrypoint \
     && mkdir -p \
         storage/app/public \
         storage/framework/cache/data \
@@ -64,7 +63,8 @@ RUN composer dump-autoload --optimize --no-interaction \
         storage/logs \
         bootstrap/cache \
     && chown -R www-data:www-data storage bootstrap/cache \
-    && chmod -R 775 storage bootstrap/cache
+    && chmod -R 775 storage bootstrap/cache \
+    && composer dump-autoload --optimize --no-interaction
 
 ENTRYPOINT ["docker-entrypoint"]
 CMD ["php-fpm"]
