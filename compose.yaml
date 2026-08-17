@@ -21,7 +21,18 @@ x-app-environment: &app-environment
   SESSION_CONNECTION: default
   CACHE_STORE: redis
   QUEUE_CONNECTION: redis
-  BROADCAST_CONNECTION: log
+  BROADCAST_CONNECTION: reverb
+  REVERB_APP_ID: ${DOCKER_REVERB_APP_ID:-battle-grid}
+  REVERB_APP_KEY: ${DOCKER_REVERB_APP_KEY:-battle-grid-key}
+  REVERB_APP_SECRET: ${DOCKER_REVERB_APP_SECRET:-battle-grid-secret}
+  REVERB_HOST: reverb
+  REVERB_PORT: 8080
+  REVERB_SCHEME: http
+  REVERB_SERVER_HOST: 0.0.0.0
+  REVERB_SERVER_PORT: 8080
+  REVERB_PUBLIC_HOST: ${DOCKER_REVERB_PUBLIC_HOST:-}
+  REVERB_PUBLIC_PORT: ${DOCKER_APP_PORT:-8080}
+  REVERB_PUBLIC_SCHEME: ${DOCKER_REVERB_PUBLIC_SCHEME:-http}
   BOT_SERVICE_ENABLED: "true"
   BOT_SERVICE_BASE_URL: http://bot:8090
   BOT_SERVICE_TOKEN: ${DOCKER_BOT_SERVICE_TOKEN:-local-bot-token}
@@ -47,7 +58,7 @@ services:
       - db_data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 5s
+      interval: 30s
       timeout: 5s
       retries: 20
 
@@ -59,7 +70,7 @@ services:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 30s
       timeout: 3s
       retries: 20
 
@@ -78,7 +89,27 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "test -f /tmp/app-ready"]
-      interval: 5s
+      interval: 30s
+      timeout: 3s
+      retries: 20
+
+  reverb:
+    build: *app-build
+    restart: unless-stopped
+    command: ["php", "artisan", "reverb:start", "--host=0.0.0.0", "--port=8080"]
+    environment:
+      <<: *app-environment
+      RUN_MIGRATIONS: "false"
+    volumes:
+      - app_storage:/var/www/html/storage
+    depends_on:
+      app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
       timeout: 3s
       retries: 20
 
@@ -94,9 +125,11 @@ services:
     depends_on:
       app:
         condition: service_healthy
+      reverb:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/up"]
-      interval: 5s
+      interval: 30s
       timeout: 3s
       retries: 20
 
@@ -113,8 +146,8 @@ services:
     ports:
       - "${DOCKER_BOT_PORT:-8090}:8090"
     healthcheck:
-      test: ["CMD", "php", "-r", "$$socket = @fsockopen('127.0.0.1', 8090); exit($$socket ? 0 : 1);"]
-      interval: 5s
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 30s
       timeout: 3s
       retries: 20
     depends_on:

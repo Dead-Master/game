@@ -15,13 +15,20 @@ docker compose up --build -d
 Из уже клонированного рабочего каталога команда та же:
 
 ```bash
-docker compose up --build -d
+make install
 ```
 
-Пока Docker-файлы ещё не отправлены в Git, локальную версию можно собрать так:
+Makefile использует локальный каталог проекта как build context. Основные команды:
 
 ```bash
-DOCKER_BUILD_CONTEXT=. docker compose up --build -d
+make up                    # запустить
+make rebuild               # пересобрать без cache и запустить
+make logs SERVICE=app      # показать последние логи Laravel и выйти
+make logs-follow SERVICE=app # следить за логами до Ctrl+C
+make artisan ARGS="about"  # выполнить Artisan-команду
+make test                  # тесты
+make down                  # остановить и удалить контейнеры, сохранив данные
+make help                  # полный список команд
 ```
 
 После запуска:
@@ -29,15 +36,16 @@ DOCKER_BUILD_CONTEXT=. docker compose up --build -d
 - игра: <http://localhost:8080>;
 - bot-service: <http://localhost:8090> (служебный API, обычный `GET` вернёт 404);
 - MariaDB 12.3 на хосте: `127.0.0.1:3307`;
-- актуальная стабильная Redis 8 доступна контейнерам во внутренней Docker-сети.
+- актуальная стабильная Redis 8 доступна контейнерам во внутренней Docker-сети;
+- Laravel Reverb передаёт игровые события в браузер через WebSocket.
 
-Миграции выполняются автоматически при старте контейнера `app`. Сессии, кэш и очередь Laravel используют Redis; обработчик очереди и bot-service запускаются отдельными контейнерами.
+Миграции выполняются автоматически при старте контейнера `app`. Сессии, кэш и очередь Laravel используют Redis; обработчик очереди, bot-service и WebSocket-сервер запускаются отдельными контейнерами. Действия бота появляются в интерфейсе без F5.
 
 Проверить состояние и посмотреть логи:
 
 ```bash
 docker compose ps
-docker compose logs -f app nginx queue bot
+docker compose logs -f app nginx reverb queue bot
 ```
 
 Запустить тесты:
@@ -56,7 +64,7 @@ docker compose down
 
 Git-контекст, порты, реквизиты базы и стратегию бота можно переопределить переменными `DOCKER_*` из [.env.docker.example](.env.docker.example). Например, для сборки конкретного коммита задайте `DOCKER_BUILD_CONTEXT=https://github.com/Dead-Master/game.git#<commit-sha>`. Docker Compose автоматически читает файл `.env`, поэтому нужные `DOCKER_*` можно добавить в него или передать перед командой запуска.
 
-> В текущей конфигурации broadcasting пишет события в лог. Для обновления состояния игры между двумя открытыми браузерами потребуется обновление страницы; подключение WebSocket-сервера настраивается отдельно.
+WebSocket-трафик проходит через Nginx по тому же адресу и порту, что и приложение (`/app/*`), поэтому отдельный публичный порт для Reverb не требуется.
 
 ---
 

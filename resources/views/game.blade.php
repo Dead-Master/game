@@ -426,10 +426,10 @@
 <div id="game-container"
      data-game-id="{{ $game->id }}"
      data-current-player-side="{{ $activeSide }}"
-     data-ws-key="{{ env('REVERB_APP_KEY', 'app-key') }}"
-     data-ws-host="{{ env('REVERB_HOST', request()->getHost()) }}"
-     data-ws-port="{{ env('REVERB_PORT', 8080) }}"
-     data-ws-scheme="{{ env('REVERB_SCHEME', 'http') }}">
+     data-ws-key="{{ env('REVERB_APP_KEY', 'battle-grid-key') }}"
+     data-ws-host="{{ env('REVERB_PUBLIC_HOST') ?: request()->getHost() }}"
+     data-ws-port="{{ env('REVERB_PUBLIC_PORT', request()->getPort()) }}"
+     data-ws-scheme="{{ env('REVERB_PUBLIC_SCHEME', request()->isSecure() ? 'https' : 'http') }}">
     <div class="layout">
         <div class="main-column">
             <h1>Игра</h1>
